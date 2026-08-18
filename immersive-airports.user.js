@@ -1,0 +1,4358 @@
+// ==UserScript==
+// @name         Immersive Airports
+// @namespace    neutrino.labs
+// @version      4.8.3
+// @description  Airport ground operations for GeoFS. Taxiway overlays, moving maps, stand guidance and marshalling.
+// @author       Neutrino Labs
+// @match        https://geo-fs.com/geofs.php*
+// @match        https://*.geo-fs.com/geofs.php*
+// @grant        none
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==
+
+(function() {
+    "use strict";
+    const OVERPASS_SERVERS = [ "https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter" ];
+    const BRAND_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAkCAYAAACaJFpUAAAFMUlEQVR42q1WXWwUVRT+zt3Zn+62bMvSsvy0BgRKICISIpCKbYnRBxIJQklAkAcRMCE2wQfEAMPGBGKMT8QEEjWEF7ArkhhiNQV3t/+lW0BBNFWg0GLNsuzCLt2f2Z05PsxCTYH9izeZTGbm3vnu991zvnMAAMzQBzNCvY1b4l3V3el2B/Olycy9k1npdF6Pdr3kutbW5gAAbkHxg1kGANxoba5NdNe08zUbKx3lD2O+aa0R3+yvYh01LUmf4yZfsbHSUzV817d2FQC0tDQVB0gAhns+mJvonRLgSzYOtS860Nf3nQOQMl8NADOCXavWK732UKq/XA11bHxFZ1oEqIcZce/0Pu2yjYfa3lytg+iysSdzz8z9y7tvbupC2b1kR9WQ389g+T/Hke+I9tRv5mtWDpxbcgAA+OrTfzL4wxwAQOj8q5v4DyuHfC/vAgD21BcGGPNM8ysdFZHOTgYzIMvyM85av475GUp7+WjCUznSclVfUxDJVHuFNvaz8zwg5ZRHj06BZGf1af7dzOGuVesLZSkkK5Oq4S4jlXt2JkZSqjEBTrFR+XM3mAGvL39ACIIQRARD7tnuTGQTJMQ0slrCK8J9axrJBTA35QnIDEDkt73MPwUpIp2uUlU2pc1jA3sACXC78wRMq4Agymu2+9EisqRj2uiYOuukpSLyxl3/zvnYMG4i2QF1XQuKbI0EGwyKMWTb9DkJwPrwxw8JBMCVB2Ce5CbkiMYQk2YvOfhL/P6kcyZrcMvgxW8qQQDLcg5ATQO0wvAEgYkEgCTGpIWHJLtqdkY+2U4A0ODKJSmhMEUpk+msejiJyrqfPIlR66DZcKe5u5uBhux2V4SkDJAAiGAe1nMkQc8fNk1VKuen6zYTAfDWZ8vDIkqMAJgZpmr98Za963gqYLlXol7fm8sIBLgIQE0DgRDNeOzixYSY5jxiccYWBHrW1iOLEQgUhahLOwOA290EloER885jalRSbPH+vZTNCPjCJI55a1oem05e5l1zJumriADmx0WcmRH1zDnOl8t55EJzLePpRiAKr6AAIFgY2BDs2bQs2Pv2gn6/H0QSguWrD4JU2B+26kbgdj3daQo+QjIqkjVqdZSc7nWYz/62KPZ6LNlX7TbFTZNj4aqz5pLA1sGLX1Ziw5P1tShAwSljOlmaDD6ofT8anblPhdVjQnj9dMvRATKgxmhVTM7YF+8RgIMTjEACEQrNRRIQWlIolQ1XjgIJABJGrsjV9sgJudQ28i5icRiVOztu3+ZDqCYwj0OIx71DIfGpASRANzmuN1qeNGa+sH+4rO7GtsDY8q0ptTRlsYdrbEMNGycagYAQBTIkkNAAIgwBoEbodibLYL+KqSs9J6K04h0YDShRBpsnGkGRUfqkKORygZbqqeOoO38qFpxxvGRqdFmw863lcI33sKKYhGdN4JmaNMlgWUPIsW2/mjCo1tTAHr19cRcLSMhWz4hcwEKg+sWPRxKRijOmsvtrQgMfPUeZjiDLVvPAzdL8MDRESld+aigBWaLfNgMEeF26eVOh5SkHIm1wAzIwfdkpfyJg6zWaAtuv+/uBRugM+f+jNj4a6gGkEC9ZeFiaotqq4jt20aOKXxzDHNtq9IEZcBvbvk/+bR42863dx/wMAQaDDFx4qIrca7z12LGUkBA1nxkdiVnrEq+tE5CYAE3K/yQJ0DSJOC3lllVnGXCePJIOS+Gy9K+HRFKpeKCSdQTQ4PXm03lrSFPZPwrsow0ZA3iWUT16P29eLZKq82uYrTP+BVb1a/Nny90DAAAAAElFTkSuQmCC";
+    const CFG = {
+        chunkSize: .04,
+        gridRadius: 1,
+        maxConcurrentRequests: 2,
+        requestSpacingMs: 500,
+        requestTimeoutMs: 2e4,
+        retryDelaysMs: [ 1200, 2500 ],
+        cooldown429Ms: 45e3,
+        cooldownTimeoutMs: 9e4,
+        cooldownServerErrorMs: 6e4,
+        cooldownOtherMs: 3e4,
+        cacheEnabled: true,
+        cacheLifetimeMs: 12 * 60 * 60 * 1e3,
+        cachePrefix: "geofsGroundChunk_v465_",
+        yellow: "#FFD21A",
+        taxiwayWidthM: 1,
+        taxilaneWidthM: .72,
+        taxilaneOpacity: .88,
+        parkingLineWidthM: .32,
+        parkingStopBarM: 4.5,
+        parkingNodeRadiusM: .65,
+        holdDefaultTaxiwayWidthM: 24,
+        holdMinLengthM: 12,
+        holdMaxLengthM: 48,
+        holdLineWidthM: .45,
+        holdPairSpacingM: .9,
+        holdGroupSpacingM: 1.8,
+        holdDashM: 2.2,
+        holdGapM: 2,
+        previewCanvasMax: 4096,
+        finalCanvasBase: 4096,
+        finalCanvasMax: 8192,
+        targetStrokePixels: 1.6,
+        imageryPaddingM: 120,
+        previewDelayMs: 160,
+        taxiLabelRepeatM: 520,
+        taxiLabelSameRefMinM: 360,
+        taxiLabelOffsetM: 8,
+        taxiLabelFontM: 8.5,
+        taxiLabelMinPx: 11,
+        taxiLabelMaxPx: 26,
+        taxiLabelPaddingM: 2.6,
+        standFontM: 5.5,
+        standMinPx: 9,
+        standMaxPx: 18,
+        detectorIntervalMs: 400,
+        detectorSearchRadiusM: 180,
+        flightSuppressSpeedKt: 65,
+        flightResumeSpeedKt: 45,
+        taxiSpeedWarningKt: 30,
+        taxiSpeedResetKt: 24,
+        taxiwayAcquireDistanceM: 22,
+        taxiwayStableMs: 900,
+        runwayExtraMarginM: 8,
+        runwayMinCorridorHalfWidthM: 20,
+        runwayMaxCorridorHalfWidthM: 44,
+        runwayStableMs: 700,
+        holdAheadDistanceM: 105,
+        holdResetDistanceM: 150,
+        holdMinSpeedKt: 1.5,
+        standParkDistanceM: 13,
+        standReleaseDistanceM: 24,
+        standParkMaxSpeedKt: 3,
+        standReleaseSpeedKt: 6,
+        standStableMs: 3500,
+        notificationCooldownMs: 7e3,
+        autoLoadCheckMs: 1e3,
+        autoLoadInitialDelayMs: 3e3,
+        autoLoadStableMs: 2500,
+        autoLoadMaxSpeedKt: 45,
+        autoLoadCooldownMs: 12e3,
+        autoLoadResetReleaseDistanceM: 2e3,
+        standLocatorUpdateMs: 500,
+        standLocatorMaxDisplayDistanceM: 8e3,
+        standLocatorLineWidthPx: 4,
+        marshallerUpdateMs: 180,
+        marshallerDisplayDistanceM: 350,
+        marshallerActiveRangeM: 120,
+        marshallerWorldLateralOffsetM: 0,
+        marshallerSidePanelOffsetXPx: 86,
+        marshallerSidePanelOffsetYPx: -42,
+        marshallerStopWindowM: 7,
+        marshallerDefaultStopOffsetM: 12,
+        marshallerMinStopOffsetM: -20,
+        marshallerMaxStopOffsetM: 30,
+        marshallerStopOffsetStepM: 1,
+        marshallerSlowDistanceM: 18,
+        marshallerWorldAheadM: 18,
+        marshallerWorldHeightM: 4.5,
+        marshallerFaceMeHeadingThresholdDeg: 25,
+        marshallerFaceMeMinRemainingM: 25,
+        marshallerLateralThresholdM: 1.8,
+        marshallerLateralMaxDistanceM: 85,
+        marshallerTooFastKt: 7,
+        minimapUpdateMs: 100,
+        minimapCanvasSize: 220,
+        minimapRangesM: [ 300, 500, 800, 1300, 2e3, 3200 ],
+        minimapDefaultRangeIndex: 3,
+        minimapTaxiLabelMaxRangeM: 1300,
+        minimapTaxiLabelMinSeparationPx: 34,
+        minimapPanRecenterMs: 5 * 60 * 1e3,
+        minimapPanMaxRangeFactor: 2.4,
+        departureUnloadMinSpeedKt: 65,
+        departureUnloadStableMs: 8e3,
+        arrivalSearchRadiusM: 4e4,
+        arrivalSearchTimeoutMs: 18e3,
+        arrivalMaxChoices: 6,
+        arrivalProtectionMs: 20 * 60 * 1e3,
+        arrivalWrongAirportDistanceIncreaseM: 6e3,
+        arrivalWrongAirportStableMs: 12e3,
+        arrivalWrongAirportMinSpeedKt: 65,
+        modifyArrivalConfirmMs: 3e3,
+        modifyArrivalMinSpeedKt: 65,
+        arrivalGroundConfirmMs: 2e3,
+        arrivalGroundMovementDistanceM: 28,
+        arrivalGroundFallbackRadiusM: 12e3,
+        arrivalGroundFallbackStableMs: 3e3,
+        arrivalGroundFallbackCooldownMs: 12e3,
+        arrivalGroundFallbackMaxAttempts: 2,
+        autoChunkRetryPasses: 2,
+        autoChunkRetryDelaysMs: [ 2500, 6e3 ],
+        autoChunkRetryConcurrency: 1
+    };
+    const state = {
+        taxiwayLabelsEnabled: localStorage.getItem("geofsGroundV4TaxiLabels") === "true",
+        standNumbersEnabled: localStorage.getItem("geofsGroundV4StandNumbers") === "true",
+        standLeadInsEnabled: localStorage.getItem("geofsGroundV4StandLeadIns") === "true",
+        notificationsEnabled: localStorage.getItem("geofsGroundV42Notifications") !== "false",
+        autoLoadEnabled: localStorage.getItem("geofsGroundV424AutoLoad") !== "false",
+        marshallerEnabled: localStorage.getItem("geofsGroundV470Marshaller") === "true",
+        marshallerStopOffsetM: (() => {
+            const saved = Number(localStorage.getItem("geofsGroundV471MarshallerStopOffsetM"));
+            return Number.isFinite(saved) ? saved : CFG.marshallerDefaultStopOffsetM;
+        })(),
+        running: false,
+        loadGeneration: 0,
+        chunks: [],
+        queryBounds: null,
+        gridSignature: null,
+        taxiways: new Map,
+        taxilanes: new Map,
+        holdings: new Map,
+        parking: new Map,
+        runways: new Map,
+        aprons: new Map,
+        chunkData: new Map,
+        activeRequests: 0,
+        controllers: new Set,
+        requestGate: Promise.resolve(),
+        lastRequestStart: 0,
+        preferredServerIndex: 0,
+        serverHealth: OVERPASS_SERVERS.map(() => ({
+            cooldownUntil: 0,
+            failures: 0,
+            successes: 0
+        })),
+        totalChunks: 0,
+        completedChunks: 0,
+        successfulChunks: 0,
+        failedChunks: 0,
+        cachedChunks: 0,
+        failedChunkKeys: new Set,
+        earlyPreviewRequested: false,
+        midPreviewRequested: false,
+        layer: null,
+        blobUrl: null,
+        renderTimer: null,
+        renderBusy: false,
+        pendingRenderQuality: 0,
+        renderSerial: 0,
+        root: null,
+        panel: null,
+        menuButton: null,
+        statusEl: null,
+        statusDot: null,
+        detailsEl: null,
+        progressFill: null,
+        loadButton: null,
+        resetButton: null,
+        taxiLabelToggle: null,
+        standNumberToggle: null,
+        standLeadInToggle: null,
+        autoLoadToggle: null,
+        standButton: null,
+        standPanel: null,
+        standInput: null,
+        standFindButton: null,
+        standClearButton: null,
+        standLocatorStatus: null,
+        marshallerToggle: null,
+        marshallerOffsetValue: null,
+        marshallerOffsetMinus: null,
+        marshallerOffsetPlus: null,
+        minimapButton: null,
+        minimapWindow: null,
+        minimapCanvas: null,
+        minimapTimer: null,
+        minimapOpen: localStorage.getItem("geofsGroundMinimapOpen") === "true",
+        minimapDragging: false,
+        minimapDragOffsetX: 0,
+        minimapDragOffsetY: 0,
+        minimapRangeIndex: (() => {
+            const saved = Number(localStorage.getItem("geofsGroundMinimapRangeIndex"));
+            return Number.isInteger(saved) ? saved : CFG.minimapDefaultRangeIndex;
+        })(),
+        minimapPanX: 0,
+        minimapPanY: 0,
+        minimapCanvasDragging: false,
+        minimapCanvasLastX: 0,
+        minimapCanvasLastY: 0,
+        minimapPanLastInteraction: 0,
+        minimapPanLocked: false,
+        notificationButton: null,
+        notificationHost: null,
+        notificationQueue: [],
+        notificationShowing: false,
+        notificationHideTimer: null,
+        detectorTimer: null,
+        autoLoadTimer: null,
+        arrivalMode: false,
+        arrivalChooserHost: null,
+        arrivalChooserDragging: false,
+        arrivalChooserDragOffsetX: 0,
+        arrivalChooserDragOffsetY: 0,
+        arrivalDiscoveryController: null,
+        arrivalDiscoveryBusy: false,
+        arrivalCandidates: [],
+        modifyArrivalButton: null,
+        modifyArrivalWrap: null,
+        modifyArrivalArmed: false,
+        modifyArrivalTimer: null,
+        arrival: {
+            departureOutsideSince: 0,
+            protectionUntil: 0,
+            selectedAirport: null,
+            manualModifyAvailable: false,
+            groundConfirmSince: 0,
+            preloadReady: false,
+            groundFallbackSince: 0,
+            groundFallbackLastAttempt: 0,
+            groundFallbackAttempts: 0,
+            selectedBestDistanceM: null,
+            movingAwaySince: 0
+        },
+        standLocatorTimer: null,
+        marshallerTimer: null,
+        marshaller: {
+            entity: null,
+            signal: null,
+            phase: -1,
+            imageCache: new Map
+        },
+        standLocator: {
+            selectedRef: null,
+            selectedFeature: null,
+            selectedTarget: null,
+            markerEntity: null,
+            leadInEntity: null,
+            markerImage: null,
+            lastDistanceM: null
+        },
+        autoLoad: {
+            startedAt: Date.now(),
+            lastPosition: null,
+            lastSampleTime: 0,
+            speedKt: 0,
+            bearingDeg: null,
+            candidateSince: 0,
+            lastTriggerTime: 0,
+            resetBlockPosition: null
+        },
+        detector: {
+            initialized: false,
+            lastPosition: null,
+            lastSampleTime: 0,
+            speedKt: 0,
+            bearingDeg: null,
+            highSpeedSuppressed: false,
+            taxiSpeedWarningActive: false,
+            taxiSpeedFlightLatch: false,
+            currentTaxiRef: null,
+            taxiCandidateRef: null,
+            taxiCandidateSince: 0,
+            currentRunwayKey: null,
+            currentRunwayFeature: null,
+            currentRunwayLabel: null,
+            runwayCandidateKey: null,
+            runwayCandidateFeature: null,
+            runwayCandidateSince: 0,
+            lastHoldAlertKey: null,
+            parkedStandRef: null,
+            standCandidateRef: null,
+            standCandidateSince: 0,
+            suppressTaxiUntil: 0,
+            cooldowns: new Map
+        }
+    };
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    function geofsReady() {
+        return !!(window.geofs && window.geofs.aircraft && window.geofs.aircraft.instance && Array.isArray(window.geofs.aircraft.instance.llaLocation) && window.geofs.api && window.geofs.api.viewer && window.Cesium);
+    }
+    async function waitForGeoFS() {
+        while (!geofsReady()) {
+            await sleep(400);
+        }
+    }
+    function aircraftLL() {
+        const lla = window.geofs.aircraft.instance.llaLocation;
+        return {
+            lat: Number(lla[0]),
+            lon: Number(lla[1])
+        };
+    }
+    function getImageryLayers() {
+        const viewer = window.geofs.api.viewer;
+        return viewer.imageryLayers || viewer.scene?.imageryLayers || null;
+    }
+    function setStatus(text, mode = "idle") {
+        if (state.statusEl) state.statusEl.textContent = text;
+        if (!state.statusDot) return;
+        state.statusDot.className = `twy-dot ${mode}`;
+    }
+    function updateSwitch(button, enabled) {
+        if (!button) return;
+        button.classList.toggle("on", enabled);
+        const knob = button.querySelector(".twy-knob");
+        if (knob) knob.style.transform = enabled ? "translateX(18px)" : "translateX(0px)";
+    }
+    function hasUsefulAirportData() {
+        return !!(state.taxiways.size || state.taxilanes.size || state.runways.size || state.holdings.size || state.parking.size || state.aprons.size);
+    }
+    function resetArrivalLockState() {
+        state.arrival.preloadReady = false;
+        state.arrival.groundFallbackSince = 0;
+        state.arrival.groundFallbackLastAttempt = 0;
+        state.arrival.groundFallbackAttempts = 0;
+    }
+    function canModifyArrival() {
+        return !!(!state.arrivalMode && state.arrival.manualModifyAvailable && state.arrival.selectedAirport && state.queryBounds);
+    }
+    function renderModifyArrivalButton() {
+        const button = state.modifyArrivalButton;
+        const wrap = state.modifyArrivalWrap;
+        if (!button || !wrap) return;
+        const visible = canModifyArrival();
+        wrap.classList.toggle("visible", visible);
+        if (!visible) {
+            disarmModifyArrival();
+            return;
+        }
+        button.classList.toggle("armed", state.modifyArrivalArmed);
+        if (state.modifyArrivalArmed) {
+            button.innerHTML = `\n                <span class="twy-modify-arr-title">⚠ MODIFY ARR</span>\n                <span class="twy-modify-arr-confirm">PRESS TO CONFIRM</span>\n            `;
+            button.title = "Press again to release the selected arrival";
+        } else {
+            button.innerHTML = `\n                <span class="twy-modify-arr-title">MODIFY ARR</span>\n                <span class="twy-modify-arr-safe">GUARDED · PRESS ONCE</span>\n            `;
+            button.title = "Guarded control · press once to arm";
+        }
+    }
+    function disarmModifyArrival() {
+        state.modifyArrivalArmed = false;
+        if (state.modifyArrivalTimer) {
+            clearTimeout(state.modifyArrivalTimer);
+            state.modifyArrivalTimer = null;
+        }
+        const button = state.modifyArrivalButton;
+        if (button) {
+            button.classList.remove("armed");
+            button.innerHTML = `\n                <span class="twy-modify-arr-title">MODIFY ARR</span>\n                <span class="twy-modify-arr-safe">GUARDED · PRESS ONCE</span>\n            `;
+        }
+    }
+    function armModifyArrival() {
+        if (!canModifyArrival()) return;
+        disarmModifyArrival();
+        state.modifyArrivalArmed = true;
+        renderModifyArrivalButton();
+        state.modifyArrivalTimer = setTimeout(() => {
+            disarmModifyArrival();
+        }, CFG.modifyArrivalConfirmMs);
+    }
+    function releaseArrivalForModification() {
+        if (!canModifyArrival()) {
+            disarmModifyArrival();
+            return;
+        }
+        const oldAirport = state.arrival.selectedAirport;
+        const oldCode = oldAirport ? airportPrimaryCode(oldAirport) : "ARRIVAL";
+        disarmModifyArrival();
+        clearAirportRuntimeKeepCache();
+        state.arrivalMode = true;
+        state.arrival.departureOutsideSince = 0;
+        state.arrival.protectionUntil = 0;
+        state.arrival.selectedAirport = null;
+        state.arrival.manualModifyAvailable = false;
+        state.arrival.groundConfirmSince = 0;
+        resetArrivalLockState();
+        state.arrival.selectedBestDistanceM = null;
+        state.arrival.movingAwaySince = 0;
+        closeArrivalChooser();
+        if (state.panel) {
+            state.panel.classList.remove("open");
+        }
+        if (state.menuButton) {
+            state.menuButton.classList.remove("active");
+        }
+        setStatus("Arrival released · choose another", "idle");
+        updateStandLocatorStatus();
+        updateUI();
+        queueNotification("warning", "ARRIVAL RELEASED", oldCode, "Choose another arrival airport", `arrival-released:${oldCode}`, 2200);
+        setTimeout(() => {
+            if (state.arrivalMode) {
+                openArrivalChooser();
+            }
+        }, 80);
+    }
+    function handleModifyArrivalPress() {
+        if (!canModifyArrival()) return;
+        if (!state.modifyArrivalArmed) {
+            armModifyArrival();
+            return;
+        }
+        releaseArrivalForModification();
+    }
+    function updateUI() {
+        if (!state.root) return;
+        if (state.menuButton) {
+            state.menuButton.textContent = state.arrivalMode ? "ARR" : "TWY";
+            state.menuButton.classList.toggle("arrival-mode", state.arrivalMode);
+            state.menuButton.title = state.arrivalMode ? "Choose arrival airport" : "Airport ground overlay";
+        }
+        const ratio = state.totalChunks > 0 ? state.completedChunks / state.totalChunks : 0;
+        if (state.progressFill) {
+            state.progressFill.style.width = `${Math.round(ratio * 100)}%`;
+        }
+        if (state.detailsEl) {
+            if (state.totalChunks === 0 && state.taxiways.size === 0) {
+                state.detailsEl.textContent = "Nothing loaded yet";
+            } else {
+                const parts = [];
+                if (state.running) {
+                    parts.push(`${state.successfulChunks} of ${state.totalChunks} areas`);
+                }
+                if (state.taxiways.size) parts.push(`${state.taxiways.size} taxiways`);
+                if (state.taxilanes.size) parts.push(`${state.taxilanes.size} taxilanes`);
+                if (state.holdings.size) parts.push(`${state.holdings.size} holds`);
+                if (state.parking.size) parts.push(`${state.parking.size} stands`);
+                if (state.cachedChunks) parts.push(`${state.cachedChunks} cached`);
+                state.detailsEl.textContent = parts.join("  •  ");
+            }
+        }
+        updateSwitch(state.taxiLabelToggle, state.taxiwayLabelsEnabled);
+        updateSwitch(state.standNumberToggle, state.standNumbersEnabled);
+        updateSwitch(state.standLeadInToggle, state.standLeadInsEnabled);
+        updateSwitch(state.autoLoadToggle, state.autoLoadEnabled);
+        updateSwitch(state.marshallerToggle, state.marshallerEnabled);
+        if (state.notificationButton) {
+            state.notificationButton.classList.toggle("notif-on", state.notificationsEnabled);
+            state.notificationButton.classList.toggle("notif-off", !state.notificationsEnabled);
+            state.notificationButton.title = state.notificationsEnabled ? "Airport awareness notifications: ON" : "Airport awareness notifications: OFF";
+        }
+        if (state.loadButton) {
+            state.loadButton.disabled = state.running;
+            state.loadButton.innerHTML = state.running ? '<span class="twy-spinner"></span>Loading…' : state.taxiways.size > 0 ? "Refresh airport" : "Load airport";
+        }
+        if (state.standButton) {
+            const selected = state.standLocator.selectedRef;
+            state.standButton.textContent = selected || "STD";
+            state.standButton.classList.toggle("selected", !!selected);
+            state.standButton.title = selected ? `Stand locator · selected ${selected}` : "Find a stand / gate";
+        }
+        renderModifyArrivalButton();
+        updateMinimapAvailability();
+    }
+    function toggleTaxiwayLabels() {
+        state.taxiwayLabelsEnabled = !state.taxiwayLabelsEnabled;
+        localStorage.setItem("geofsGroundV4TaxiLabels", String(state.taxiwayLabelsEnabled));
+        if (state.taxiways.size) requestRender(2, 0);
+        setStatus(state.taxiwayLabelsEnabled ? "Taxiway labels on" : "Taxiway labels off", state.taxiways.size ? "ready" : "idle");
+        updateUI();
+    }
+    function toggleStandNumbers() {
+        state.standNumbersEnabled = !state.standNumbersEnabled;
+        localStorage.setItem("geofsGroundV4StandNumbers", String(state.standNumbersEnabled));
+        if (state.taxiways.size || state.parking.size) requestRender(2, 0);
+        setStatus(state.standNumbersEnabled ? "Stand numbers on" : "Stand numbers off", state.taxiways.size ? "ready" : "idle");
+        updateUI();
+    }
+    function toggleStandLeadIns() {
+        state.standLeadInsEnabled = !state.standLeadInsEnabled;
+        localStorage.setItem("geofsGroundV4StandLeadIns", String(state.standLeadInsEnabled));
+        if (state.taxiways.size || state.parking.size) requestRender(2, 0);
+        setStatus(state.standLeadInsEnabled ? "Stand lead-ins on" : "Stand lead-ins off", state.taxiways.size ? "ready" : "idle");
+        updateUI();
+    }
+    function toggleAutoLoad() {
+        state.autoLoadEnabled = !state.autoLoadEnabled;
+        localStorage.setItem("geofsGroundV424AutoLoad", String(state.autoLoadEnabled));
+        state.autoLoad.candidateSince = 0;
+        if (state.autoLoadEnabled) {
+            state.autoLoad.startedAt = Date.now();
+            state.autoLoad.lastPosition = null;
+            state.autoLoad.lastSampleTime = 0;
+            state.autoLoad.speedKt = 0;
+            state.autoLoad.resetBlockPosition = null;
+            setStatus("Auto-load airports on", state.taxiways.size ? "ready" : "idle");
+        } else {
+            setStatus("Auto-load airports off", state.taxiways.size ? "ready" : "idle");
+        }
+        updateUI();
+    }
+    function clearNotificationQueue() {
+        state.notificationQueue = [];
+        state.notificationShowing = false;
+        if (state.notificationHideTimer) {
+            clearTimeout(state.notificationHideTimer);
+            state.notificationHideTimer = null;
+        }
+        if (state.notificationHost) {
+            state.notificationHost.innerHTML = "";
+        }
+    }
+    function resetDetectorState() {
+        const oldCooldowns = state.detector?.cooldowns instanceof Map ? state.detector.cooldowns : new Map;
+        state.detector = {
+            initialized: false,
+            lastPosition: null,
+            lastSampleTime: 0,
+            speedKt: 0,
+            bearingDeg: null,
+            highSpeedSuppressed: false,
+            taxiSpeedWarningActive: false,
+            taxiSpeedFlightLatch: false,
+            currentTaxiRef: null,
+            taxiCandidateRef: null,
+            taxiCandidateSince: 0,
+            currentRunwayKey: null,
+            currentRunwayFeature: null,
+            currentRunwayLabel: null,
+            runwayCandidateKey: null,
+            runwayCandidateFeature: null,
+            runwayCandidateSince: 0,
+            lastHoldAlertKey: null,
+            parkedStandRef: null,
+            standCandidateRef: null,
+            standCandidateSince: 0,
+            suppressTaxiUntil: 0,
+            cooldowns: oldCooldowns
+        };
+    }
+    function toggleNotifications() {
+        state.notificationsEnabled = !state.notificationsEnabled;
+        localStorage.setItem("geofsGroundV42Notifications", String(state.notificationsEnabled));
+        resetDetectorState();
+        clearNotificationQueue();
+        setStatus(state.notificationsEnabled ? "Airport notifications on" : "Airport notifications off", state.taxiways.size ? "ready" : "idle");
+        updateUI();
+        if (state.notificationsEnabled) {
+            queueNotification("success", "NOTIFICATIONS", "ON", "Airport awareness active", "notif-enabled-test", 1900);
+        }
+    }
+    function showNextNotification() {
+        if (!state.notificationsEnabled || state.notificationShowing || !state.notificationHost || state.notificationQueue.length === 0) {
+            return;
+        }
+        const item = state.notificationQueue.shift();
+        state.notificationShowing = true;
+        const card = document.createElement("div");
+        card.className = `twy-notification-card ${item.type || "info"}`;
+        const title = document.createElement("div");
+        title.className = "twy-notification-title";
+        title.textContent = item.title;
+        const value = document.createElement("div");
+        value.className = "twy-notification-value";
+        value.textContent = item.value || "";
+        card.append(title, value);
+        if (item.meta) {
+            const meta = document.createElement("div");
+            meta.className = "twy-notification-meta";
+            meta.textContent = item.meta;
+            card.appendChild(meta);
+        }
+        state.notificationHost.innerHTML = "";
+        state.notificationHost.appendChild(card);
+        requestAnimationFrame(() => {
+            card.classList.add("show");
+        });
+        state.notificationHideTimer = setTimeout(() => {
+            card.classList.remove("show");
+            setTimeout(() => {
+                if (state.notificationHost && card.parentNode === state.notificationHost) {
+                    state.notificationHost.removeChild(card);
+                }
+                state.notificationShowing = false;
+                state.notificationHideTimer = null;
+                showNextNotification();
+            }, 220);
+        }, item.durationMs || 2600);
+    }
+    function queueNotification(type, title, value, meta, eventKey, durationMs = 2600) {
+        if (!state.notificationsEnabled) return;
+        const now = Date.now();
+        const key = eventKey || `${type}:${title}:${value}`;
+        const last = state.detector.cooldowns.get(key) || 0;
+        if (now - last < CFG.notificationCooldownMs) return;
+        state.detector.cooldowns.set(key, now);
+        if (state.notificationQueue.length >= 3) {
+            state.notificationQueue.shift();
+        }
+        state.notificationQueue.push({
+            type: type,
+            title: title,
+            value: value,
+            meta: meta,
+            durationMs: durationMs
+        });
+        showNextNotification();
+    }
+    function removeMarshallerEntity() {
+        const entities = getCesiumEntityCollection();
+        if (entities && state.marshaller.entity) {
+            try {
+                entities.remove(state.marshaller.entity);
+            } catch (_) {}
+        }
+        state.marshaller.entity = null;
+        state.marshaller.signal = null;
+        state.marshaller.phase = -1;
+    }
+    function stopMarshallerMonitor() {
+        if (state.marshallerTimer) {
+            clearInterval(state.marshallerTimer);
+            state.marshallerTimer = null;
+        }
+    }
+    function marshallerStandAxisBearing(feature) {
+        const points = feature?.points || [];
+        if (points.length < 2) {
+            return null;
+        }
+        const a = points[points.length - 2];
+        const b = points[points.length - 1];
+        if (!a || !b) return null;
+        return bearingDegrees(a, b);
+    }
+    function marshallerOrientedAxisBearing(feature, aircraft, target) {
+        let axis = marshallerStandAxisBearing(feature);
+        if (!Number.isFinite(axis) || !aircraft || !target) {
+            return axis;
+        }
+        const inbound = bearingDegrees(aircraft, target);
+        if (Number.isFinite(inbound) && angleDifferenceDegrees(axis, inbound) > 90) {
+            axis = (axis + 180) % 360;
+        }
+        return axis;
+    }
+    function clampMarshallerStopOffset() {
+        state.marshallerStopOffsetM = clamp(Number(state.marshallerStopOffsetM) || 0, CFG.marshallerMinStopOffsetM, CFG.marshallerMaxStopOffsetM);
+    }
+    function updateMarshallerOffsetUI() {
+        clampMarshallerStopOffset();
+        if (state.marshallerOffsetValue) {
+            state.marshallerOffsetValue.textContent = `${Math.round(state.marshallerStopOffsetM)} m`;
+        }
+        if (state.marshallerOffsetMinus) {
+            state.marshallerOffsetMinus.disabled = state.marshallerStopOffsetM <= CFG.marshallerMinStopOffsetM;
+        }
+        if (state.marshallerOffsetPlus) {
+            state.marshallerOffsetPlus.disabled = state.marshallerStopOffsetM >= CFG.marshallerMaxStopOffsetM;
+        }
+    }
+    function adjustMarshallerStopOffset(delta) {
+        state.marshallerStopOffsetM += delta;
+        clampMarshallerStopOffset();
+        localStorage.setItem("geofsGroundV471MarshallerStopOffsetM", String(state.marshallerStopOffsetM));
+        updateMarshallerOffsetUI();
+        if (state.marshallerEnabled) {
+            updateMarshaller();
+        }
+    }
+    function marshallerDisplayPoint(target, feature) {
+        const aircraft = aircraftLL();
+        const axis = marshallerOrientedAxisBearing(feature, aircraft, target);
+        if (!Number.isFinite(axis)) {
+            return target;
+        }
+        const radians = axis * Math.PI / 180;
+        const forwardNorthM = Math.cos(radians) * CFG.marshallerWorldAheadM;
+        const forwardEastM = Math.sin(radians) * CFG.marshallerWorldAheadM;
+        const lateralNorthM = -Math.sin(radians) * CFG.marshallerWorldLateralOffsetM;
+        const lateralEastM = Math.cos(radians) * CFG.marshallerWorldLateralOffsetM;
+        const northM = forwardNorthM + lateralNorthM;
+        const eastM = forwardEastM + lateralEastM;
+        const lat = target.lat + northM / 111320;
+        const lonScale = 111320 * Math.max(.2, Math.cos(target.lat * Math.PI / 180));
+        const lon = target.lon + eastM / lonScale;
+        return {
+            lat: lat,
+            lon: lon
+        };
+    }
+    function marshallerGuidanceState() {
+        const target = state.standLocator.selectedTarget;
+        const feature = state.standLocator.selectedFeature;
+        if (!target) return null;
+        const aircraft = aircraftLL();
+        if (!Number.isFinite(aircraft.lat) || !Number.isFinite(aircraft.lon)) {
+            return null;
+        }
+        const distanceM = geoDistanceMeters(aircraft, target);
+        const speedKt = Number.isFinite(state.detector.speedKt) ? state.detector.speedKt : Number.isFinite(state.autoLoad.speedKt) ? state.autoLoad.speedKt : 0;
+        const axisBearing = marshallerOrientedAxisBearing(feature, aircraft, target);
+        let lateralM = 0;
+        let alongRemainingM = null;
+        let hasAxis = false;
+        let headingErrorDeg = 0;
+        let hasHeading = false;
+        if (Number.isFinite(axisBearing)) {
+            const local = localMeters(target, aircraft);
+            const radians = axisBearing * Math.PI / 180;
+            lateralM = local.x * Math.cos(radians) - local.y * Math.sin(radians);
+            alongRemainingM = -(local.x * Math.sin(radians) + local.y * Math.cos(radians));
+            hasAxis = true;
+            const aircraftHeading = Number.isFinite(state.detector.bearingDeg) ? state.detector.bearingDeg : Number.isFinite(state.autoLoad.bearingDeg) ? state.autoLoad.bearingDeg : null;
+            if (Number.isFinite(aircraftHeading)) {
+                headingErrorDeg = angleDifferenceDegrees(aircraftHeading, axisBearing);
+                hasHeading = true;
+            }
+        }
+        clampMarshallerStopOffset();
+        const remainingM = hasAxis && Number.isFinite(alongRemainingM) ? alongRemainingM - state.marshallerStopOffsetM : distanceM - Math.max(0, state.marshallerStopOffsetM);
+        let signal = "FORWARD";
+        if (remainingM <= CFG.marshallerStopWindowM) {
+            signal = "STOP";
+        } else if (hasAxis && hasHeading && remainingM > CFG.marshallerFaceMeMinRemainingM && headingErrorDeg > CFG.marshallerFaceMeHeadingThresholdDeg) {
+            signal = "FACE ME";
+        } else if (hasAxis && distanceM <= CFG.marshallerLateralMaxDistanceM && Math.abs(lateralM) >= CFG.marshallerLateralThresholdM) {
+            signal = lateralM > 0 ? "LEFT" : "RIGHT";
+        } else if (remainingM <= CFG.marshallerSlowDistanceM || remainingM <= 35 && speedKt >= CFG.marshallerTooFastKt) {
+            signal = "SLOW";
+        } else {
+            signal = "FORWARD";
+        }
+        return {
+            signal: signal,
+            distanceM: distanceM,
+            remainingM: remainingM,
+            speedKt: speedKt,
+            lateralM: lateralM,
+            alongRemainingM: alongRemainingM,
+            hasAxis: hasAxis,
+            headingErrorDeg: headingErrorDeg,
+            hasHeading: hasHeading
+        };
+    }
+    function createMarshallerImage(signal, phase) {
+        const cacheKey = `${signal}:${phase}`;
+        if (state.marshaller.imageCache.has(cacheKey)) {
+            return state.marshaller.imageCache.get(cacheKey);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = 160;
+        canvas.height = 120;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, 160, 120);
+        ctx.save();
+        ctx.save();
+        const panelX = 16;
+        const panelY = 10;
+        const panelW = 128;
+        const panelH = 100;
+        const radius = 14;
+        ctx.beginPath();
+        ctx.moveTo(panelX + radius, panelY);
+        ctx.lineTo(panelX + panelW - radius, panelY);
+        ctx.quadraticCurveTo(panelX + panelW, panelY, panelX + panelW, panelY + radius);
+        ctx.lineTo(panelX + panelW, panelY + panelH - radius);
+        ctx.quadraticCurveTo(panelX + panelW, panelY + panelH, panelX + panelW - radius, panelY + panelH);
+        ctx.lineTo(panelX + radius, panelY + panelH);
+        ctx.quadraticCurveTo(panelX, panelY + panelH, panelX, panelY + panelH - radius);
+        ctx.lineTo(panelX, panelY + radius);
+        ctx.quadraticCurveTo(panelX, panelY, panelX + radius, panelY);
+        ctx.closePath();
+        ctx.fillStyle = "#000000";
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#4A4A4A";
+        ctx.stroke();
+        ctx.restore();
+        const cx = 80;
+        const cy = 56;
+        const wand = 32;
+        function stick(x1, y1, x2, y2) {
+            ctx.save();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = "#000000";
+            ctx.lineWidth = 9;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.restore();
+            ctx.save();
+            ctx.shadowColor = "rgba(255,35,35,.32)";
+            ctx.shadowBlur = 3;
+            ctx.strokeStyle = "#FF4444";
+            ctx.lineWidth = 6;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.restore();
+        }
+        if (signal === "STOP") {
+            stick(cx - 22, cy + 20, cx + 18, cy - 25);
+            stick(cx + 22, cy + 20, cx - 18, cy - 25);
+        } else if (signal === "FACE ME") {
+            stick(cx - 22, cy + 20, cx - 22, cy - 30);
+            stick(cx + 22, cy + 20, cx + 22, cy - 30);
+        } else if (signal === "LEFT") {
+            stick(cx - 14, cy + 18, cx - 48, cy - 3);
+            stick(cx + 14, cy + 18, cx + 14, cy - wand);
+        } else if (signal === "RIGHT") {
+            stick(cx + 14, cy + 18, cx + 48, cy - 3);
+            stick(cx - 14, cy + 18, cx - 14, cy - wand);
+        } else if (signal === "SLOW") {
+            const delta = phase ? 7 : 0;
+            stick(cx - 15, cy + 18, cx - 36 + delta, cy - 18 + delta);
+            stick(cx + 15, cy + 18, cx + 36 - delta, cy - 18 + delta);
+        } else {
+            const delta = phase ? 12 : -4;
+            stick(cx - 15, cy + 18, cx - 42 + delta, cy - 28 + delta);
+            stick(cx + 15, cy + 18, cx + 42 - delta, cy - 28 + delta);
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.font = signal === "FACE ME" ? "700 13px Arial" : "700 15px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 4;
+        ctx.strokeText(signal, 80, 96);
+        ctx.fillStyle = "#FF6060";
+        ctx.shadowColor = "rgba(255,30,30,.42)";
+        ctx.shadowBlur = 4;
+        ctx.fillText(signal, 80, 96);
+        ctx.restore();
+        const image = canvas.toDataURL("image/png");
+        state.marshaller.imageCache.set(cacheKey, image);
+        return image;
+    }
+    function ensureMarshallerEntity() {
+        if (!state.marshallerEnabled || !state.standLocator.selectedTarget) {
+            removeMarshallerEntity();
+            return false;
+        }
+        const Cesium = window.Cesium;
+        const entities = getCesiumEntityCollection();
+        if (!Cesium || !entities) return false;
+        const target = state.standLocator.selectedTarget;
+        const displayPoint = marshallerDisplayPoint(target, state.standLocator.selectedFeature);
+        if (!state.marshaller.entity) {
+            const position = Cesium.Cartesian3.fromDegrees(displayPoint.lon, displayPoint.lat, CFG.marshallerWorldHeightM);
+            const displayCondition = Cesium.DistanceDisplayCondition ? new Cesium.DistanceDisplayCondition(0, CFG.marshallerDisplayDistanceM) : undefined;
+            try {
+                state.marshaller.entity = entities.add({
+                    position: position,
+                    billboard: {
+                        image: createMarshallerImage("FORWARD", 0),
+                        width: 112,
+                        height: 84,
+                        verticalOrigin: Cesium.VerticalOrigin?.BOTTOM,
+                        horizontalOrigin: Cesium.HorizontalOrigin?.CENTER,
+                        heightReference: Cesium.HeightReference?.RELATIVE_TO_GROUND,
+                        pixelOffset: new Cesium.Cartesian2(0, -14),
+                        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                        distanceDisplayCondition: displayCondition,
+                        show: false
+                    },
+                    label: {
+                        text: "",
+                        font: "700 12px Arial",
+                        fillColor: Cesium.Color.WHITE,
+                        outlineColor: Cesium.Color.BLACK,
+                        outlineWidth: 2,
+                        style: Cesium.LabelStyle?.FILL_AND_OUTLINE,
+                        showBackground: true,
+                        backgroundColor: Cesium.Color.fromCssColorString("#17191B").withAlpha(.94),
+                        backgroundPadding: new Cesium.Cartesian2(9, 6),
+                        pixelOffset: new Cesium.Cartesian2(CFG.marshallerSidePanelOffsetXPx, CFG.marshallerSidePanelOffsetYPx),
+                        horizontalOrigin: Cesium.HorizontalOrigin?.LEFT,
+                        verticalOrigin: Cesium.VerticalOrigin?.CENTER,
+                        heightReference: Cesium.HeightReference?.RELATIVE_TO_GROUND,
+                        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                        distanceDisplayCondition: displayCondition,
+                        show: false
+                    }
+                });
+            } catch (error) {
+                console.error("[Immersive Airports] Marshaller entity creation failed", error);
+                state.marshaller.entity = null;
+                syncStandMarkerVisibility();
+                return false;
+            }
+        }
+        return !!state.marshaller.entity;
+    }
+    function updateMarshaller() {
+        if (!state.marshallerEnabled || !state.standLocator.selectedTarget) {
+            removeMarshallerEntity();
+            return;
+        }
+        if (!ensureMarshallerEntity()) return;
+        const guidance = marshallerGuidanceState();
+        if (!guidance) return;
+        const active = marshallerIsActivelyGuiding();
+        if (state.marshaller.entity?.billboard) {
+            state.marshaller.entity.billboard.show = active;
+        }
+        if (state.marshaller.entity?.label) {
+            state.marshaller.entity.label.show = active;
+            if (active) {
+                const ref = state.standLocator.selectedRef || "STAND";
+                state.marshaller.entity.label.text = `STAND ${ref}\n${standDistanceText(guidance.distanceM)}`;
+            }
+        }
+        syncStandMarkerVisibility();
+        const now = Date.now();
+        let phase = 0;
+        if (guidance.signal === "FORWARD") {
+            phase = Math.floor(now / 230) % 2;
+        } else if (guidance.signal === "SLOW") {
+            phase = Math.floor(now / 650) % 2;
+        }
+        if (guidance.signal !== state.marshaller.signal || phase !== state.marshaller.phase) {
+            state.marshaller.signal = guidance.signal;
+            state.marshaller.phase = phase;
+            if (state.marshaller.entity?.billboard) {
+                state.marshaller.entity.billboard.image = createMarshallerImage(guidance.signal, phase);
+            }
+        }
+    }
+    function startMarshallerMonitor() {
+        if (!state.marshallerEnabled || !state.standLocator.selectedTarget || state.marshallerTimer) {
+            return;
+        }
+        updateMarshaller();
+        state.marshallerTimer = setInterval(updateMarshaller, CFG.marshallerUpdateMs);
+    }
+    function marshallerIsActivelyGuiding() {
+        if (!state.marshallerEnabled || !state.standLocator.selectedTarget) {
+            return false;
+        }
+        const aircraft = aircraftLL();
+        if (!Number.isFinite(aircraft.lat) || !Number.isFinite(aircraft.lon)) {
+            return false;
+        }
+        const distanceM = geoDistanceMeters(aircraft, state.standLocator.selectedTarget);
+        return distanceM <= CFG.marshallerActiveRangeM;
+    }
+    function syncStandMarkerVisibility() {
+        const marker = state.standLocator.markerEntity;
+        if (!marker) return;
+        const active = marshallerIsActivelyGuiding() && !!state.marshaller.entity;
+        try {
+            if (marker.billboard) {
+                marker.billboard.show = !active;
+            }
+            if (marker.label) {
+                marker.label.show = !active;
+                const Cesium = window.Cesium;
+                if (!active && Cesium?.Cartesian2) {
+                    marker.label.pixelOffset = new Cesium.Cartesian2(0, -58);
+                }
+            }
+        } catch (_) {}
+    }
+    function syncMarshaller() {
+        if (state.marshallerEnabled && state.standLocator.selectedTarget) {
+            startMarshallerMonitor();
+            updateMarshaller();
+        } else {
+            stopMarshallerMonitor();
+            removeMarshallerEntity();
+            syncStandMarkerVisibility();
+        }
+    }
+    function toggleMarshaller() {
+        state.marshallerEnabled = !state.marshallerEnabled;
+        localStorage.setItem("geofsGroundV470Marshaller", String(state.marshallerEnabled));
+        syncMarshaller();
+        updateUI();
+        if (state.marshallerEnabled) {
+            setStatus(state.standLocator.selectedTarget ? "Marshaller guidance on" : "Marshaller on · select a stand", state.standLocator.selectedTarget ? "ready" : "idle");
+        } else {
+            setStatus("Marshaller guidance off", state.taxiways.size ? "ready" : "idle");
+        }
+    }
+    function getCesiumEntityCollection() {
+        const viewer = window.geofs?.api?.viewer;
+        return viewer?.entities || null;
+    }
+    function normalizeStandQuery(raw) {
+        let value = String(raw ?? "").trim().toUpperCase();
+        value = value.replace(/^(STAND|GATE)\s*/i, "");
+        value = value.replace(/\s+/g, "");
+        return value;
+    }
+    function standTargetPoint(feature) {
+        if (!feature) return null;
+        return parkingTargetPoint(feature);
+    }
+    function findLoadedStand(rawQuery) {
+        const query = normalizeStandQuery(rawQuery);
+        if (!query) return null;
+        const aircraft = aircraftLL();
+        const matches = [];
+        for (const feature of state.parking.values()) {
+            const ref = normalizeRef(feature.ref);
+            if (!ref) continue;
+            if (normalizeStandQuery(ref) !== query) continue;
+            const target = standTargetPoint(feature);
+            if (!target) continue;
+            const distance = Number.isFinite(aircraft.lat) && Number.isFinite(aircraft.lon) ? geoDistanceMeters(aircraft, target) : Infinity;
+            matches.push({
+                feature: feature,
+                ref: ref.toUpperCase(),
+                target: target,
+                distance: distance
+            });
+        }
+        if (!matches.length) return null;
+        matches.sort((a, b) => a.distance - b.distance);
+        return matches[0];
+    }
+    function createStandPinImage() {
+        if (state.standLocator.markerImage) {
+            return state.standLocator.markerImage;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = 64;
+        canvas.height = 84;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.translate(2, 3);
+        ctx.fillStyle = "rgba(0,0,0,.42)";
+        ctx.beginPath();
+        ctx.moveTo(32, 80);
+        ctx.bezierCurveTo(29, 68, 11, 53, 11, 31);
+        ctx.arc(32, 31, 21, Math.PI, 0);
+        ctx.bezierCurveTo(53, 53, 35, 68, 32, 80);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = "#FFD21A";
+        ctx.strokeStyle = "#151719";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(32, 78);
+        ctx.bezierCurveTo(29, 67, 11, 52, 11, 30);
+        ctx.arc(32, 30, 21, Math.PI, 0);
+        ctx.bezierCurveTo(53, 52, 35, 67, 32, 78);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#1B1D1F";
+        ctx.beginPath();
+        ctx.arc(32, 30, 7, 0, Math.PI * 2);
+        ctx.fill();
+        state.standLocator.markerImage = canvas.toDataURL("image/png");
+        return state.standLocator.markerImage;
+    }
+    function removeStandLocatorEntities(options = {}) {
+        stopMarshallerMonitor();
+        removeMarshallerEntity();
+        const entities = getCesiumEntityCollection();
+        if (entities) {
+            for (const entity of [ state.standLocator.markerEntity, state.standLocator.leadInEntity ]) {
+                if (!entity) continue;
+                try {
+                    entities.remove(entity);
+                } catch (_) {}
+            }
+        }
+        state.standLocator.markerEntity = null;
+        state.standLocator.leadInEntity = null;
+        state.standLocator.lastDistanceM = null;
+        if (options.clearSelection) {
+            state.standLocator.selectedRef = null;
+            state.standLocator.selectedFeature = null;
+            state.standLocator.selectedTarget = null;
+            if (state.standInput) state.standInput.value = "";
+        }
+        updateStandLocatorStatus();
+        updateUI();
+    }
+    function standDistanceText(distanceM) {
+        if (!Number.isFinite(distanceM)) return "";
+        if (distanceM >= 1e3) {
+            return `${(distanceM / 1e3).toFixed(distanceM >= 1e4 ? 0 : 1)} km`;
+        }
+        if (distanceM >= 100) {
+            return `${Math.round(distanceM / 10) * 10} m`;
+        }
+        return `${Math.max(0, Math.round(distanceM))} m`;
+    }
+    function updateStandLocatorStatus(message = null, mode = "") {
+        if (!state.standLocatorStatus) return;
+        if (message) {
+            state.standLocatorStatus.textContent = message;
+            state.standLocatorStatus.dataset.mode = mode || "";
+            return;
+        }
+        const ref = state.standLocator.selectedRef;
+        if (!ref) {
+            state.standLocatorStatus.textContent = state.parking.size ? `${state.parking.size} loaded stands` : "Load an airport first";
+            state.standLocatorStatus.dataset.mode = "";
+            return;
+        }
+        const distance = standDistanceText(state.standLocator.lastDistanceM);
+        state.standLocatorStatus.textContent = distance ? `Selected ${ref}  •  ${distance}` : `Selected ${ref}`;
+        state.standLocatorStatus.dataset.mode = "selected";
+    }
+    function buildStandLocatorEntities(match) {
+        const Cesium = window.Cesium;
+        const entities = getCesiumEntityCollection();
+        if (!Cesium || !entities || !match?.target) {
+            updateStandLocatorStatus("Could not create stand marker", "error");
+            return false;
+        }
+        removeStandLocatorEntities({
+            clearSelection: false
+        });
+        const target = match.target;
+        const position = Cesium.Cartesian3.fromDegrees(target.lon, target.lat, 0);
+        const displayCondition = Cesium.DistanceDisplayCondition ? new Cesium.DistanceDisplayCondition(0, CFG.standLocatorMaxDisplayDistanceM) : undefined;
+        const heightReference = Cesium.HeightReference?.CLAMP_TO_GROUND;
+        const verticalOrigin = Cesium.VerticalOrigin?.BOTTOM;
+        const horizontalOrigin = Cesium.HorizontalOrigin?.CENTER;
+        const pinImage = createStandPinImage();
+        state.standLocator.markerEntity = entities.add({
+            position: position,
+            billboard: {
+                image: pinImage,
+                width: 32,
+                height: 42,
+                verticalOrigin: verticalOrigin,
+                horizontalOrigin: horizontalOrigin,
+                heightReference: heightReference,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                distanceDisplayCondition: displayCondition
+            },
+            label: {
+                text: `STAND ${match.ref}`,
+                font: "700 14px Arial",
+                fillColor: Cesium.Color.WHITE,
+                outlineColor: Cesium.Color.BLACK,
+                outlineWidth: 2,
+                style: Cesium.LabelStyle?.FILL_AND_OUTLINE,
+                showBackground: true,
+                backgroundColor: Cesium.Color.fromCssColorString("#17191B").withAlpha(.94),
+                backgroundPadding: new Cesium.Cartesian2(10, 7),
+                pixelOffset: new Cesium.Cartesian2(0, -58),
+                horizontalOrigin: horizontalOrigin,
+                verticalOrigin: Cesium.VerticalOrigin?.BOTTOM,
+                heightReference: heightReference,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                distanceDisplayCondition: displayCondition
+            }
+        });
+        const points = match.feature.points || [];
+        if (points.length >= 2) {
+            const positions = points.map(point => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, 0));
+            state.standLocator.leadInEntity = entities.add({
+                polyline: {
+                    positions: positions,
+                    width: CFG.standLocatorLineWidthPx,
+                    material: Cesium.Color.fromCssColorString("#FFD21A").withAlpha(.96),
+                    clampToGround: true
+                }
+            });
+        }
+        syncStandMarkerVisibility();
+        return true;
+    }
+    function selectStand(rawQuery, options = {}) {
+        const query = normalizeStandQuery(rawQuery);
+        if (!query) {
+            updateStandLocatorStatus("Enter a stand number", "error");
+            state.standInput?.focus();
+            return false;
+        }
+        if (!state.parking.size) {
+            updateStandLocatorStatus("No stand data loaded yet", "error");
+            if (!options.silent) {
+                queueNotification("warning", "STAND LOCATOR", "NO AIRPORT DATA", "Wait for airport loading to finish", "stand-no-data", 2400);
+            }
+            return false;
+        }
+        const match = findLoadedStand(query);
+        if (!match) {
+            updateStandLocatorStatus(`Stand ${query} not found`, "error");
+            if (!options.silent) {
+                queueNotification("warning", "STAND NOT FOUND", query, "Not in loaded airport data", `stand-not-found:${query}`, 2500);
+            }
+            return false;
+        }
+        state.standLocator.selectedRef = match.ref;
+        state.standLocator.selectedFeature = match.feature;
+        state.standLocator.selectedTarget = match.target;
+        state.standLocator.lastDistanceM = match.distance;
+        if (state.standInput) {
+            state.standInput.value = match.ref;
+        }
+        const created = buildStandLocatorEntities(match);
+        if (!created) return false;
+        updateStandLocatorStatus();
+        updateUI();
+        syncMarshaller();
+        if (state.minimapOpen) {
+            drawMinimap();
+        }
+        if (!options.silent) {
+            queueNotification("success", "STAND LOCATED", match.ref, standDistanceText(match.distance), `stand-located:${match.ref}`, 2400);
+        }
+        return true;
+    }
+    function clearStandSelection() {
+        removeStandLocatorEntities({
+            clearSelection: true
+        });
+        updateStandLocatorStatus();
+        if (state.minimapOpen) {
+            drawMinimap();
+        }
+        if (state.standInput) {
+            state.standInput.focus();
+        }
+    }
+    function updateStandLocator() {
+        const ref = state.standLocator.selectedRef;
+        const target = state.standLocator.selectedTarget;
+        if (!ref || !target) {
+            updateStandLocatorStatus();
+            return;
+        }
+        const aircraft = aircraftLL();
+        if (!Number.isFinite(aircraft.lat) || !Number.isFinite(aircraft.lon)) {
+            return;
+        }
+        const distance = geoDistanceMeters(aircraft, target);
+        state.standLocator.lastDistanceM = distance;
+        if (state.standLocator.markerEntity?.label) {
+            state.standLocator.markerEntity.label.text = `STAND ${ref}\n${standDistanceText(distance)}`;
+        }
+        updateStandLocatorStatus();
+    }
+    function startStandLocatorMonitor() {
+        if (state.standLocatorTimer) return;
+        state.standLocatorTimer = setInterval(updateStandLocator, CFG.standLocatorUpdateMs);
+    }
+    function reacquireSelectedStandAfterLoad() {
+        const ref = state.standLocator.selectedRef;
+        if (!ref) return;
+        const found = selectStand(ref, {
+            silent: true
+        });
+        if (!found) {
+            removeStandLocatorEntities({
+                clearSelection: true
+            });
+        }
+    }
+    function minimapAvailable() {
+        return !!(!state.arrivalMode && state.chunkData.size && hasUsefulAirportData());
+    }
+    function minimapIsPanned() {
+        return Math.abs(state.minimapPanX) > .5 || Math.abs(state.minimapPanY) > .5;
+    }
+    function minimapTouchInteraction() {
+        state.minimapPanLastInteraction = Date.now();
+    }
+    function recenterMinimap(options = {}) {
+        state.minimapPanX = 0;
+        state.minimapPanY = 0;
+        state.minimapCanvasDragging = false;
+        state.minimapPanLastInteraction = 0;
+        if (options.unlock !== false) {
+            state.minimapPanLocked = false;
+        }
+        updateMinimapControls();
+        drawMinimap();
+    }
+    function clampMinimapPan() {
+        const maxPx = CFG.minimapCanvasSize * CFG.minimapPanMaxRangeFactor;
+        state.minimapPanX = clamp(state.minimapPanX, -maxPx, maxPx);
+        state.minimapPanY = clamp(state.minimapPanY, -maxPx, maxPx);
+    }
+    function startMinimapCanvasPan(event) {
+        if (!state.minimapOpen || !minimapAvailable() || event.button !== 0) {
+            return;
+        }
+        state.minimapCanvasDragging = true;
+        state.minimapCanvasLastX = event.clientX;
+        state.minimapCanvasLastY = event.clientY;
+        minimapTouchInteraction();
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    function moveMinimapCanvasPan(event) {
+        if (!state.minimapCanvasDragging) return;
+        const dx = event.clientX - state.minimapCanvasLastX;
+        const dy = event.clientY - state.minimapCanvasLastY;
+        state.minimapCanvasLastX = event.clientX;
+        state.minimapCanvasLastY = event.clientY;
+        state.minimapPanX += dx;
+        state.minimapPanY += dy;
+        clampMinimapPan();
+        minimapTouchInteraction();
+        updateMinimapControls();
+        drawMinimap();
+        event.preventDefault();
+    }
+    function endMinimapCanvasPan() {
+        if (!state.minimapCanvasDragging) return;
+        state.minimapCanvasDragging = false;
+        minimapTouchInteraction();
+        updateMinimapControls();
+    }
+    function toggleMinimapPanLock() {
+        if (!minimapIsPanned()) {
+            state.minimapPanLocked = false;
+            updateMinimapControls();
+            return;
+        }
+        state.minimapPanLocked = !state.minimapPanLocked;
+        if (!state.minimapPanLocked) {
+            recenterMinimap({
+                unlock: true
+            });
+            return;
+        }
+        minimapTouchInteraction();
+        updateMinimapControls();
+    }
+    function maybeAutoRecenterMinimap() {
+        if (!minimapIsPanned() || state.minimapPanLocked || state.minimapCanvasDragging) {
+            return;
+        }
+        if (!state.minimapPanLastInteraction) {
+            minimapTouchInteraction();
+            return;
+        }
+        if (Date.now() - state.minimapPanLastInteraction >= CFG.minimapPanRecenterMs) {
+            recenterMinimap({
+                unlock: true
+            });
+        }
+    }
+    function minimapHeadingDeg() {
+        if (Number.isFinite(state.autoLoad.bearingDeg)) return state.autoLoad.bearingDeg;
+        if (Number.isFinite(state.detector.bearingDeg)) return state.detector.bearingDeg;
+        return 0;
+    }
+    function minimapRangeM() {
+        state.minimapRangeIndex = clamp(Math.round(state.minimapRangeIndex), 0, CFG.minimapRangesM.length - 1);
+        return CFG.minimapRangesM[state.minimapRangeIndex];
+    }
+    function minimapRangeText(rangeM = minimapRangeM()) {
+        const nm = rangeM / 1852;
+        if (nm < .5) {
+            return `${nm.toFixed(2)} NM`;
+        }
+        if (nm < 1) {
+            return `${nm.toFixed(1)} NM`;
+        }
+        return `${nm.toFixed(1)} NM`;
+    }
+    function setMinimapRangeIndex(index) {
+        const next = clamp(Math.round(index), 0, CFG.minimapRangesM.length - 1);
+        if (next === state.minimapRangeIndex) return;
+        state.minimapRangeIndex = next;
+        localStorage.setItem("geofsGroundMinimapRangeIndex", String(next));
+        if (minimapIsPanned()) {
+            minimapTouchInteraction();
+        }
+        updateMinimapControls();
+        drawMinimap();
+    }
+    function minimapZoomIn() {
+        setMinimapRangeIndex(state.minimapRangeIndex - 1);
+    }
+    function minimapZoomOut() {
+        setMinimapRangeIndex(state.minimapRangeIndex + 1);
+    }
+    function updateMinimapControls() {
+        const zoomIn = state.minimapWindow?.querySelector("#twy-minimap-zoom-in");
+        const zoomOut = state.minimapWindow?.querySelector("#twy-minimap-zoom-out");
+        const range = state.minimapWindow?.querySelector("#twy-minimap-range");
+        const lock = state.minimapWindow?.querySelector("#twy-minimap-lock");
+        if (zoomIn) {
+            zoomIn.disabled = state.minimapRangeIndex <= 0;
+        }
+        if (zoomOut) {
+            zoomOut.disabled = state.minimapRangeIndex >= CFG.minimapRangesM.length - 1;
+        }
+        if (range) {
+            range.textContent = minimapRangeText();
+        }
+        if (lock) {
+            const panned = minimapIsPanned();
+            lock.disabled = !panned;
+            lock.classList.toggle("active", state.minimapPanLocked);
+            lock.textContent = state.minimapPanLocked ? "LOCK" : "FOLLOW";
+            lock.title = state.minimapPanLocked ? "Unlock and return to aircraft-centred follow mode" : panned ? "Lock this panned map position" : "Map is following the aircraft";
+        }
+    }
+    function minimapProject(origin, point, headingDeg, scale, cx, cy) {
+        const local = localMeters(origin, point);
+        const h = headingDeg * Math.PI / 180;
+        const right = local.x * Math.cos(h) - local.y * Math.sin(h);
+        const forward = local.x * Math.sin(h) + local.y * Math.cos(h);
+        return {
+            x: cx + state.minimapPanX + right * scale,
+            y: cy + state.minimapPanY - forward * scale
+        };
+    }
+    function minimapDrawPolygon(ctx, feature, origin, heading, scale, cx, cy) {
+        const points = feature?.points || [];
+        if (points.length < 3) return;
+        ctx.beginPath();
+        points.forEach((point, index) => {
+            const p = minimapProject(origin, point, heading, scale, cx, cy);
+            if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        });
+        ctx.closePath();
+        ctx.fill();
+        if (ctx.lineWidth > 0) {
+            ctx.stroke();
+        }
+    }
+    function minimapDrawFeature(ctx, feature, origin, heading, scale, cx, cy) {
+        const points = feature?.points || (feature?.point ? [ feature.point ] : []);
+        if (points.length < 2) return;
+        ctx.beginPath();
+        points.forEach((point, index) => {
+            const p = minimapProject(origin, point, heading, scale, cx, cy);
+            if (index === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        });
+        ctx.stroke();
+    }
+    function minimapFeatureMidpoint(feature) {
+        const points = feature?.points || [];
+        if (!points.length) return feature?.point || null;
+        return points[Math.floor(points.length / 2)] || null;
+    }
+    function minimapDrawLabel(ctx, text, x, y, options = {}) {
+        if (!text) return;
+        const fontSize = options.fontSize || 8;
+        const weight = options.weight || 700;
+        ctx.save();
+        ctx.font = `${weight} ${fontSize}px Arial`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const width = ctx.measureText(text).width;
+        const padX = options.padX ?? 3;
+        const padY = options.padY ?? 2;
+        ctx.fillStyle = options.background || "rgba(18,20,22,.86)";
+        ctx.fillRect(x - width / 2 - padX, y - fontSize / 2 - padY, width + padX * 2, fontSize + padY * 2);
+        ctx.fillStyle = options.color || "#e8ecef";
+        ctx.fillText(text, x, y + .3);
+        ctx.restore();
+    }
+    function minimapDrawRunwayLabels(ctx, runways, origin, heading, scale, cx, cy, size, range) {
+        for (const feature of runways) {
+            const ref = normalizeRef(feature.ref);
+            if (!ref) continue;
+            if (featureDistanceMeters(origin, feature) > range * 1.25) {
+                continue;
+            }
+            const point = minimapFeatureMidpoint(feature);
+            if (!point) continue;
+            const p = minimapProject(origin, point, heading, scale, cx, cy);
+            if (p.x < 14 || p.y < 14 || p.x > size - 14 || p.y > size - 14) {
+                continue;
+            }
+            minimapDrawLabel(ctx, ref.toUpperCase(), p.x, p.y, {
+                fontSize: 8,
+                weight: 700,
+                color: "#c9ced1",
+                background: "rgba(25,28,30,.90)",
+                padX: 4
+            });
+        }
+    }
+    function minimapDrawTaxiwayLabels(ctx, taxiways, origin, heading, scale, cx, cy, size, range) {
+        if (range > CFG.minimapTaxiLabelMaxRangeM) {
+            return;
+        }
+        const placed = [];
+        const seenRefs = new Set;
+        const candidates = taxiways.filter(feature => normalizeRef(feature.ref)).map(feature => ({
+            feature: feature,
+            distance: featureDistanceMeters(origin, feature)
+        })).filter(item => item.distance <= range * 1.1).sort((a, b) => a.distance - b.distance);
+        for (const item of candidates) {
+            const ref = normalizeRef(item.feature.ref)?.toUpperCase();
+            if (!ref) continue;
+            if (seenRefs.has(ref)) continue;
+            const point = minimapFeatureMidpoint(item.feature);
+            if (!point) continue;
+            const p = minimapProject(origin, point, heading, scale, cx, cy);
+            if (p.x < 16 || p.y < 16 || p.x > size - 16 || p.y > size - 16) {
+                continue;
+            }
+            const crowded = placed.some(old => Math.hypot(old.x - p.x, old.y - p.y) < CFG.minimapTaxiLabelMinSeparationPx);
+            if (crowded) continue;
+            minimapDrawLabel(ctx, ref, p.x, p.y, {
+                fontSize: range <= 500 ? 9 : 8,
+                color: "#ffe263",
+                background: "rgba(16,18,19,.88)"
+            });
+            placed.push(p);
+            seenRefs.add(ref);
+        }
+    }
+    function minimapSelectedStandScreenPoint(origin, heading, scale, cx, cy) {
+        const target = state.standLocator.selectedTarget;
+        const ref = state.standLocator.selectedRef;
+        if (!target || !ref) return null;
+        return {
+            ref: ref,
+            point: minimapProject(origin, target, heading, scale, cx, cy),
+            feature: state.standLocator.selectedFeature
+        };
+    }
+    function minimapDrawSelectedStandUnderlay(ctx, origin, heading, scale, cx, cy) {
+        const selected = minimapSelectedStandScreenPoint(origin, heading, scale, cx, cy);
+        if (!selected) return;
+        const p = selected.point;
+        const aircraftX = cx + state.minimapPanX;
+        const aircraftY = cy + state.minimapPanY;
+        ctx.save();
+        ctx.setLineDash([ 3, 5 ]);
+        ctx.strokeStyle = "rgba(255,255,255,.11)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(aircraftX, aircraftY);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const points = selected.feature?.points || [];
+        if (points.length >= 2) {
+            ctx.strokeStyle = "rgba(255,255,255,.28)";
+            ctx.lineWidth = 1.6;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            minimapDrawFeature(ctx, selected.feature, origin, heading, scale, cx, cy);
+        }
+        ctx.restore();
+    }
+    function minimapDrawSelectedStandMarker(ctx, origin, heading, scale, cx, cy, size) {
+        const selected = minimapSelectedStandScreenPoint(origin, heading, scale, cx, cy);
+        if (!selected) return;
+        const p = selected.point;
+        const ref = selected.ref;
+        const aircraftX = cx + state.minimapPanX;
+        const aircraftY = cy + state.minimapPanY;
+        const margin = 14;
+        const visible = p.x >= margin && p.y >= margin && p.x <= size - margin && p.y <= size - margin;
+        if (!visible) {
+            const dx = p.x - aircraftX;
+            const dy = p.y - aircraftY;
+            const maxX = size / 2 - 18;
+            const maxY = size / 2 - 18;
+            const factor = Math.min(maxX / Math.max(Math.abs(dx), .001), maxY / Math.max(Math.abs(dy), .001));
+            const ex = aircraftX + dx * factor;
+            const ey = aircraftY + dy * factor;
+            ctx.save();
+            ctx.translate(ex, ey);
+            ctx.rotate(Math.atan2(dy, dx) + Math.PI / 2);
+            ctx.fillStyle = "rgba(255,255,255,.90)";
+            ctx.strokeStyle = "#151719";
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(0, -5);
+            ctx.lineTo(4, 3.5);
+            ctx.lineTo(-4, 3.5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+            minimapDrawLabel(ctx, `STD ${ref}`, ex, ey + 11, {
+                fontSize: 7,
+                color: "rgba(255,255,255,.92)",
+                background: "rgba(18,20,22,.68)",
+                padX: 3,
+                padY: 1
+            });
+            return;
+        }
+        ctx.save();
+        ctx.fillStyle = "rgba(255,255,255,.18)";
+        ctx.strokeStyle = "rgba(255,255,255,.92)";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,.95)";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        minimapDrawLabel(ctx, `STD ${ref}`, p.x, p.y - 11, {
+            fontSize: 7,
+            color: "rgba(255,255,255,.94)",
+            background: "rgba(18,20,22,.66)",
+            padX: 3,
+            padY: 1
+        });
+    }
+    function minimapDrawCompass(ctx, heading, size) {
+        const x = size - 18;
+        const y = 18;
+        const radius = 9;
+        ctx.save();
+        ctx.strokeStyle = "rgba(220,224,227,.32)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        const a = heading * Math.PI / 180;
+        const dx = -Math.sin(a);
+        const dy = -Math.cos(a);
+        ctx.strokeStyle = "#eef0f1";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + dx * (radius - 2), y + dy * (radius - 2));
+        ctx.stroke();
+        ctx.fillStyle = "#eef0f1";
+        ctx.font = "700 7px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("N", x + dx * (radius + 5), y + dy * (radius + 5));
+        ctx.restore();
+    }
+    function minimapHasVisibleGroundGeometry(origin, range, aprons, runways, taxiways, taxilanes) {
+        const groups = [ [ aprons, 1.75 ], [ runways, 1.45 ], [ taxiways, 1.35 ], [ taxilanes, 1.35 ] ];
+        for (const [features, factor] of groups) {
+            for (const feature of features) {
+                if (featureDistanceMeters(origin, feature) <= range * factor) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    function minimapDrawOutOfCoverage(ctx, size) {
+        ctx.save();
+        ctx.fillStyle = "rgba(255,210,26,.82)";
+        ctx.font = "400 11px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("OUT OF COVERAGE", size / 2, size / 2);
+        ctx.restore();
+    }
+    function drawMinimap() {
+        if (!state.minimapOpen || !state.minimapCanvas) {
+            return;
+        }
+        if (!minimapAvailable()) {
+            setMinimapOpen(false);
+            return;
+        }
+        const canvas = state.minimapCanvas;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const size = CFG.minimapCanvasSize;
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        const pixels = Math.round(size * dpr);
+        if (canvas.width !== pixels || canvas.height !== pixels) {
+            canvas.width = pixels;
+            canvas.height = pixels;
+            canvas.style.width = `${size}px`;
+            canvas.style.height = `${size}px`;
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, size, size);
+        ctx.fillStyle = "#15181a";
+        ctx.fillRect(0, 0, size, size);
+        const origin = aircraftLL();
+        if (!Number.isFinite(origin.lat) || !Number.isFinite(origin.lon)) {
+            return;
+        }
+        const heading = minimapHeadingDeg();
+        const range = minimapRangeM();
+        const cx = size / 2;
+        const cy = size / 2;
+        const scale = size * .46 / range;
+        const datasets = nearbyChunkDatasets(origin, range * 1.35);
+        const aprons = collectNearbyFeatures(datasets, "aprons");
+        const runways = collectNearbyFeatures(datasets, "runways");
+        const taxiways = collectNearbyFeatures(datasets, "taxiways");
+        const taxilanes = collectNearbyFeatures(datasets, "taxilanes");
+        const hasVisibleGroundGeometry = minimapHasVisibleGroundGeometry(origin, range, aprons, runways, taxiways, taxilanes);
+        if (!hasVisibleGroundGeometry) {
+            minimapDrawOutOfCoverage(ctx, size);
+            return;
+        }
+        ctx.save();
+        ctx.fillStyle = "#24292c";
+        ctx.strokeStyle = "rgba(145,153,158,.18)";
+        ctx.lineWidth = .7;
+        for (const feature of aprons) {
+            if (featureDistanceMeters(origin, feature) <= range * 1.75) {
+                minimapDrawPolygon(ctx, feature, origin, heading, scale, cx, cy);
+            }
+        }
+        ctx.restore();
+        minimapDrawSelectedStandUnderlay(ctx, origin, heading, scale, cx, cy);
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "#4d5357";
+        ctx.lineWidth = 8;
+        for (const feature of runways) {
+            if (featureDistanceMeters(origin, feature) <= range * 1.45) {
+                minimapDrawFeature(ctx, feature, origin, heading, scale, cx, cy);
+            }
+        }
+        ctx.strokeStyle = "#8c7c30";
+        ctx.lineWidth = 1.1;
+        for (const feature of taxilanes) {
+            if (featureDistanceMeters(origin, feature) <= range * 1.35) {
+                minimapDrawFeature(ctx, feature, origin, heading, scale, cx, cy);
+            }
+        }
+        ctx.strokeStyle = "#f1c918";
+        ctx.lineWidth = 1.7;
+        for (const feature of taxiways) {
+            if (featureDistanceMeters(origin, feature) <= range * 1.35) {
+                minimapDrawFeature(ctx, feature, origin, heading, scale, cx, cy);
+            }
+        }
+        ctx.restore();
+        minimapDrawRunwayLabels(ctx, runways, origin, heading, scale, cx, cy, size, range);
+        minimapDrawTaxiwayLabels(ctx, taxiways, origin, heading, scale, cx, cy, size, range);
+        minimapDrawSelectedStandMarker(ctx, origin, heading, scale, cx, cy, size);
+        const aircraftX = cx + state.minimapPanX;
+        const aircraftY = cy + state.minimapPanY;
+        ctx.save();
+        ctx.translate(aircraftX, aircraftY);
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#101214";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(0, -9);
+        ctx.lineTo(6, 7);
+        ctx.lineTo(0, 4);
+        ctx.lineTo(-6, 7);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+        minimapDrawCompass(ctx, heading, size);
+        ctx.fillStyle = "#aeb4b8";
+        ctx.font = "600 8px Arial";
+        ctx.textAlign = "right";
+        ctx.fillText(`HDG ${String(Math.round((heading % 360 + 360) % 360)).padStart(3, "0")}°`, size - 8, size - 8);
+    }
+    function setMinimapOpen(open) {
+        const wanted = !!open;
+        if (wanted && !minimapAvailable()) {
+            state.minimapOpen = false;
+            localStorage.setItem("geofsGroundMinimapOpen", "false");
+            state.minimapWindow?.classList.remove("open");
+            state.minimapButton?.classList.remove("active");
+            return;
+        }
+        state.minimapOpen = wanted;
+        localStorage.setItem("geofsGroundMinimapOpen", String(state.minimapOpen));
+        state.minimapWindow?.classList.toggle("open", state.minimapOpen);
+        state.minimapButton?.classList.toggle("active", state.minimapOpen);
+        updateMinimapControls();
+        if (state.minimapOpen) {
+            drawMinimap();
+        }
+    }
+    function toggleMinimap() {
+        if (!minimapAvailable()) return;
+        setMinimapOpen(!state.minimapOpen);
+    }
+    function updateMinimapAvailability() {
+        const available = minimapAvailable();
+        const button = state.minimapButton;
+        if (button) {
+            button.disabled = !available;
+            button.classList.toggle("unavailable", !available);
+            button.title = available ? "Airport moving map" : "Moving map available with loaded airport ground data";
+        }
+        if (!available && state.minimapOpen) {
+            setMinimapOpen(false);
+        }
+    }
+    function saveMinimapPosition() {
+        if (!state.minimapWindow) return;
+        const rect = state.minimapWindow.getBoundingClientRect();
+        localStorage.setItem("geofsGroundMinimapPosition", JSON.stringify({
+            left: Math.round(rect.left),
+            top: Math.round(rect.top)
+        }));
+    }
+    function restoreMinimapPosition() {
+        if (!state.minimapWindow) return;
+        let saved = null;
+        try {
+            saved = JSON.parse(localStorage.getItem("geofsGroundMinimapPosition") || "null");
+        } catch (_) {}
+        if (!saved || !Number.isFinite(saved.left) || !Number.isFinite(saved.top)) {
+            return;
+        }
+        const maxLeft = Math.max(6, window.innerWidth - 238);
+        const maxTop = Math.max(6, window.innerHeight - 285);
+        state.minimapWindow.style.left = `${clamp(saved.left, 6, maxLeft)}px`;
+        state.minimapWindow.style.top = `${clamp(saved.top, 6, maxTop)}px`;
+        state.minimapWindow.style.right = "auto";
+        state.minimapWindow.style.bottom = "auto";
+    }
+    function startMinimapDrag(event) {
+        if (!state.minimapWindow || event.button !== 0 || event.target.closest("button")) {
+            return;
+        }
+        const rect = state.minimapWindow.getBoundingClientRect();
+        state.minimapDragging = true;
+        state.minimapDragOffsetX = event.clientX - rect.left;
+        state.minimapDragOffsetY = event.clientY - rect.top;
+        state.minimapWindow.style.left = `${rect.left}px`;
+        state.minimapWindow.style.top = `${rect.top}px`;
+        state.minimapWindow.style.right = "auto";
+        state.minimapWindow.style.bottom = "auto";
+        event.preventDefault();
+    }
+    function moveMinimapDrag(event) {
+        if (!state.minimapDragging || !state.minimapWindow) {
+            return;
+        }
+        const width = state.minimapWindow.offsetWidth || 232;
+        const height = state.minimapWindow.offsetHeight || 285;
+        const left = clamp(event.clientX - state.minimapDragOffsetX, 4, Math.max(4, window.innerWidth - width - 4));
+        const top = clamp(event.clientY - state.minimapDragOffsetY, 4, Math.max(4, window.innerHeight - height - 4));
+        state.minimapWindow.style.left = `${left}px`;
+        state.minimapWindow.style.top = `${top}px`;
+    }
+    function endMinimapDrag() {
+        if (!state.minimapDragging) return;
+        state.minimapDragging = false;
+        saveMinimapPosition();
+    }
+    function startMinimapMonitor() {
+        if (state.minimapTimer) return;
+        state.minimapTimer = setInterval(() => {
+            updateMinimapAvailability();
+            if (state.minimapOpen) {
+                maybeAutoRecenterMinimap();
+                drawMinimap();
+            }
+        }, CFG.minimapUpdateMs);
+    }
+    function closeArrivalChooser(options = {}) {
+        const abort = options.abort !== false;
+        if (abort && state.arrivalDiscoveryController) {
+            try {
+                state.arrivalDiscoveryController.abort();
+            } catch (_) {}
+        }
+        state.arrivalDiscoveryController = null;
+        state.arrivalDiscoveryBusy = false;
+        if (state.arrivalChooserHost) {
+            state.arrivalChooserHost.classList.remove("open");
+            state.arrivalChooserHost.innerHTML = "";
+        }
+    }
+    function escapeHtml(value) {
+        return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+    }
+    function airportPrimaryCode(candidate) {
+        return (candidate.icao || candidate.iata || candidate.ref || "AIRPORT").toUpperCase();
+    }
+    function airportSecondaryCode(candidate) {
+        const primary = airportPrimaryCode(candidate);
+        const values = [ candidate.icao, candidate.iata, candidate.ref ].filter(Boolean).map(value => String(value).toUpperCase()).filter(value => value !== primary);
+        return values[0] || "";
+    }
+    function arrivalDistanceText(distanceM) {
+        if (!Number.isFinite(distanceM)) return "";
+        if (distanceM >= 1e4) return `${Math.round(distanceM / 1e3)} km`;
+        if (distanceM >= 1e3) return `${(distanceM / 1e3).toFixed(1)} km`;
+        return `${Math.round(distanceM)} m`;
+    }
+    function arrivalBearingDifference(candidate) {
+        const heading = state.autoLoad.bearingDeg;
+        if (!Number.isFinite(heading) || !Number.isFinite(candidate.bearingDeg)) {
+            return null;
+        }
+        return angleDifferenceDegrees(heading, candidate.bearingDeg);
+    }
+    function renderArrivalChooserLoading() {
+        if (!state.arrivalChooserHost) return;
+        state.arrivalChooserHost.innerHTML = `\n            <div class="twy-arrival-card">\n                <div class="twy-arrival-title">CHOOSE ARRIVAL</div>\n                <div class="twy-arrival-subtitle">\n                    Searching nearby aerodromes…\n                </div>\n\n                <div class="twy-arrival-loading">\n                    <span class="twy-spinner"></span>\n                    Looking within ${Math.round(CFG.arrivalSearchRadiusM / 1e3)} km\n                </div>\n\n                <button class="twy-arrival-cancel">CANCEL</button>\n            </div>\n        `;
+        state.arrivalChooserHost.classList.add("open");
+        state.arrivalChooserHost.querySelector(".twy-arrival-cancel")?.addEventListener("click", event => {
+            event.stopPropagation();
+            closeArrivalChooser();
+        });
+    }
+    function renderArrivalChooserError(message) {
+        if (!state.arrivalChooserHost) return;
+        state.arrivalChooserHost.innerHTML = `\n            <div class="twy-arrival-card">\n                <div class="twy-arrival-title">CHOOSE ARRIVAL</div>\n                <div class="twy-arrival-error">${escapeHtml(message)}</div>\n\n                <div class="twy-arrival-actions">\n                    <button class="twy-arrival-retry">RETRY</button>\n                    <button class="twy-arrival-cancel">CANCEL</button>\n                </div>\n            </div>\n        `;
+        state.arrivalChooserHost.classList.add("open");
+        state.arrivalChooserHost.querySelector(".twy-arrival-retry")?.addEventListener("click", event => {
+            event.stopPropagation();
+            openArrivalChooser();
+        });
+        state.arrivalChooserHost.querySelector(".twy-arrival-cancel")?.addEventListener("click", event => {
+            event.stopPropagation();
+            closeArrivalChooser();
+        });
+    }
+    function renderArrivalChoices(candidates) {
+        if (!state.arrivalChooserHost) return;
+        const rows = candidates.map((candidate, index) => {
+            const primary = airportPrimaryCode(candidate);
+            const secondary = airportSecondaryCode(candidate);
+            const secondaryText = secondary ? ` · ${secondary}` : "";
+            const name = candidate.name || "Unnamed aerodrome";
+            const diff = arrivalBearingDifference(candidate);
+            const ahead = Number.isFinite(diff) && diff <= 35 ? '<span class="twy-arrival-ahead">AHEAD</span>' : "";
+            return `\n                <button class="twy-arrival-choice" data-arrival-index="${index}">\n                    <div class="twy-arrival-choice-main">\n                        <span class="twy-arrival-code">\n                            ${escapeHtml(primary)}${escapeHtml(secondaryText)}\n                        </span>\n                        ${ahead}\n                    </div>\n\n                    <div class="twy-arrival-name">\n                        ${escapeHtml(name)}\n                    </div>\n\n                    <div class="twy-arrival-distance">\n                        ${escapeHtml(arrivalDistanceText(candidate.distanceM))}\n                    </div>\n                </button>\n            `;
+        }).join("");
+        state.arrivalChooserHost.innerHTML = `\n            <div class="twy-arrival-card">\n                <div class="twy-arrival-title">CHOOSE ARRIVAL</div>\n                <div class="twy-arrival-subtitle">\n                    Nearby airports · closest useful matches first\n                </div>\n\n                <div class="twy-arrival-list">\n                    ${rows}\n                </div>\n\n                <button class="twy-arrival-cancel">CANCEL</button>\n            </div>\n        `;
+        state.arrivalChooserHost.classList.add("open");
+        for (const button of state.arrivalChooserHost.querySelectorAll(".twy-arrival-choice")) {
+            button.addEventListener("click", event => {
+                event.stopPropagation();
+                const index = Number(button.dataset.arrivalIndex);
+                const candidate = state.arrivalCandidates[index];
+                if (candidate) {
+                    chooseArrivalAirport(candidate);
+                }
+            });
+        }
+        state.arrivalChooserHost.querySelector(".twy-arrival-cancel")?.addEventListener("click", event => {
+            event.stopPropagation();
+            closeArrivalChooser();
+        });
+    }
+    function buildArrivalDiscoveryQuery(position) {
+        const radius = Math.round(CFG.arrivalSearchRadiusM);
+        return `\n[out:json][timeout:15];\n(\n  node["aeroway"="aerodrome"](around:${radius},${position.lat},${position.lon});\n  way["aeroway"="aerodrome"](around:${radius},${position.lat},${position.lon});\n  relation["aeroway"="aerodrome"](around:${radius},${position.lat},${position.lon});\n);\nout center;\n`;
+    }
+    function parseArrivalCandidates(data, position) {
+        const byIdentity = new Map;
+        for (const element of data?.elements || []) {
+            const tags = element.tags || {};
+            const lat = Number(element.type === "node" ? element.lat : element.center?.lat);
+            const lon = Number(element.type === "node" ? element.lon : element.center?.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+            const icao = cleanRef(tags.icao);
+            const iata = cleanRef(tags.iata);
+            const ref = cleanRef(tags.ref);
+            const name = cleanRef(tags.name) || cleanRef(tags["name:en"]) || null;
+            const center = {
+                lat: lat,
+                lon: lon
+            };
+            const distanceM = geoDistanceMeters(position, center);
+            if (distanceM > CFG.arrivalSearchRadiusM * 1.08) continue;
+            const bearingDeg = bearingDegrees(position, center);
+            const identity = icao && `ICAO:${icao.toUpperCase()}` || iata && `IATA:${iata.toUpperCase()}` || name && `NAME:${name.toUpperCase()}` || `${element.type}:${element.id}`;
+            const candidate = {
+                id: element.id,
+                osmType: element.type,
+                center: center,
+                icao: icao,
+                iata: iata,
+                ref: ref,
+                name: name,
+                distanceM: distanceM,
+                bearingDeg: bearingDeg,
+                tags: tags
+            };
+            const old = byIdentity.get(identity);
+            if (!old || candidate.distanceM < old.distanceM) {
+                byIdentity.set(identity, candidate);
+            }
+        }
+        const heading = state.autoLoad.bearingDeg;
+        const candidates = [ ...byIdentity.values() ];
+        for (const candidate of candidates) {
+            const anglePenalty = Number.isFinite(heading) ? angleDifferenceDegrees(heading, candidate.bearingDeg) * 70 : 0;
+            const codePenalty = candidate.icao || candidate.iata || candidate.ref ? 0 : 1e4;
+            candidate.rankScore = candidate.distanceM + anglePenalty + codePenalty;
+        }
+        candidates.sort((a, b) => {
+            if (a.rankScore !== b.rankScore) {
+                return a.rankScore - b.rankScore;
+            }
+            return a.distanceM - b.distanceM;
+        });
+        return candidates.slice(0, CFG.arrivalMaxChoices);
+    }
+    async function requestArrivalDiscovery(position, serverIndex) {
+        await waitForRequestGate();
+        const controller = new AbortController;
+        state.arrivalDiscoveryController = controller;
+        const timeout = setTimeout(() => controller.abort(), CFG.arrivalSearchTimeoutMs);
+        try {
+            const response = await fetch(OVERPASS_SERVERS[serverIndex], {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+                },
+                body: "data=" + encodeURIComponent(buildArrivalDiscoveryQuery(position)),
+                signal: controller.signal
+            });
+            if (!response.ok) {
+                throw new HttpError(response.status);
+            }
+            return await response.json();
+        } finally {
+            clearTimeout(timeout);
+            if (state.arrivalDiscoveryController === controller) {
+                state.arrivalDiscoveryController = null;
+            }
+        }
+    }
+    async function discoverArrivalAirports() {
+        if (state.arrivalDiscoveryBusy) return;
+        const position = aircraftLL();
+        if (!Number.isFinite(position.lat) || !Number.isFinite(position.lon)) {
+            renderArrivalChooserError("Aircraft position unavailable");
+            return;
+        }
+        state.arrivalDiscoveryBusy = true;
+        renderArrivalChooserLoading();
+        const order = serverOrder();
+        let lastError = null;
+        try {
+            for (const serverIndex of order) {
+                try {
+                    const data = await requestArrivalDiscovery(position, serverIndex);
+                    markServerSuccess(serverIndex);
+                    const candidates = parseArrivalCandidates(data, position);
+                    if (!candidates.length) {
+                        renderArrivalChooserError(`No aerodromes found within ${Math.round(CFG.arrivalSearchRadiusM / 1e3)} km`);
+                        return;
+                    }
+                    state.arrivalCandidates = candidates;
+                    renderArrivalChoices(candidates);
+                    return;
+                } catch (error) {
+                    lastError = error;
+                    if (error?.name === "AbortError") {
+                        if (!state.arrivalChooserHost?.classList.contains("open")) {
+                            return;
+                        }
+                    }
+                    markServerFailure(serverIndex, error);
+                }
+            }
+            console.warn("[TWY ARR] Arrival discovery failed", lastError);
+            renderArrivalChooserError("Could not search nearby airports right now");
+        } finally {
+            state.arrivalDiscoveryBusy = false;
+        }
+    }
+    function startArrivalChooserDrag(event) {
+        if (!state.arrivalChooserHost || event.button !== 0 || event.target.closest("button, input, a")) {
+            return;
+        }
+        const rect = state.arrivalChooserHost.getBoundingClientRect();
+        state.arrivalChooserDragging = true;
+        state.arrivalChooserDragOffsetX = event.clientX - rect.left;
+        state.arrivalChooserDragOffsetY = event.clientY - rect.top;
+        state.arrivalChooserHost.style.setProperty("left", `${rect.left}px`, "important");
+        state.arrivalChooserHost.style.setProperty("top", `${rect.top}px`, "important");
+        state.arrivalChooserHost.style.setProperty("transform", "none", "important");
+        event.preventDefault();
+    }
+    function moveArrivalChooserDrag(event) {
+        if (!state.arrivalChooserDragging || !state.arrivalChooserHost) {
+            return;
+        }
+        const width = state.arrivalChooserHost.offsetWidth || 430;
+        const height = state.arrivalChooserHost.offsetHeight || 260;
+        const left = clamp(event.clientX - state.arrivalChooserDragOffsetX, 4, Math.max(4, window.innerWidth - width - 4));
+        const top = clamp(event.clientY - state.arrivalChooserDragOffsetY, 4, Math.max(4, window.innerHeight - height - 4));
+        state.arrivalChooserHost.style.setProperty("left", `${left}px`, "important");
+        state.arrivalChooserHost.style.setProperty("top", `${top}px`, "important");
+        event.preventDefault();
+    }
+    function endArrivalChooserDrag() {
+        state.arrivalChooserDragging = false;
+    }
+    function openArrivalChooser() {
+        if (!state.arrivalMode) return;
+        closeArrivalChooser();
+        state.arrivalCandidates = [];
+        discoverArrivalAirports();
+    }
+    function chooseArrivalAirport(candidate) {
+        closeArrivalChooser();
+        disarmModifyArrival();
+        state.arrivalMode = false;
+        state.arrival.selectedAirport = candidate;
+        state.arrival.manualModifyAvailable = true;
+        state.arrival.groundConfirmSince = 0;
+        resetArrivalLockState();
+        state.arrival.protectionUntil = Date.now() + CFG.arrivalProtectionMs;
+        state.arrival.departureOutsideSince = 0;
+        const aircraft = aircraftLL();
+        state.arrival.selectedBestDistanceM = Number.isFinite(aircraft.lat) && Number.isFinite(aircraft.lon) ? geoDistanceMeters(aircraft, candidate.center) : candidate.distanceM;
+        state.arrival.movingAwaySince = 0;
+        updateUI();
+        const code = airportPrimaryCode(candidate);
+        queueNotification("success", "ARRIVAL SELECTED", code, candidate.name || arrivalDistanceText(candidate.distanceM), `arrival-selected:${code}`, 2500);
+        loadAirport({
+            automatic: false,
+            arrival: true,
+            center: candidate.center,
+            airport: candidate
+        });
+    }
+    function addUI() {
+        document.getElementById("geofs-twy-ui")?.remove();
+        document.getElementById("geofs-twy-style")?.remove();
+        document.getElementById("twy-notification-host")?.remove();
+        document.getElementById("twy-arrival-host")?.remove();
+        document.getElementById("twy-minimap-window")?.remove();
+        const style = document.createElement("style");
+        style.id = "geofs-twy-style";
+        style.textContent = `\n            #geofs-twy-ui {\n                position: relative;\n                display: inline-flex;\n                align-items: center;\n                font-family: Arial, Helvetica, sans-serif;\n                color: #eee;\n                user-select: none;\n                overflow: visible;\n            }\n\n            #geofs-twy-ui * { box-sizing: border-box; }\n\n            #twy-brand {\n                position: absolute;\n                right: 0;\n                bottom: calc(100% + 6px);\n                display: flex;\n                align-items: center;\n                gap: 5px;\n                white-space: nowrap;\n                pointer-events: none;\n            }\n\n            #twy-brand img {\n                width: auto;\n                height: 18px;\n                display: block;\n                filter:\n                    drop-shadow(0 1px 1px rgba(0,0,0,.78))\n                    drop-shadow(0 0 4px rgba(0,0,0,.42));\n            }\n\n            #twy-brand span {\n                font-size: 10px;\n                font-weight: 700;\n                letter-spacing: .55px;\n                color: #eef0f1;\n                line-height: 1;\n                text-shadow:\n                    0 1px 1px rgba(0,0,0,.88),\n                    0 0 4px rgba(0,0,0,.52),\n                    0 0 8px rgba(0,0,0,.24);\n            }\n\n\n            \n            #twy-menu-button,\n            #twy-stand-button {\n                min-width: 42px;\n                width: 42px;\n                padding-left: 0;\n                padding-right: 0;\n\n                font-size: 10px;\n                font-weight: 700;\n                letter-spacing: .45px;\n                line-height: inherit;\n                text-align: center;\n            }\n\n            #twy-menu-button.active,\n            #twy-stand-button.active {\n                background: rgba(255,255,255,.14);\n            }\n\n            #twy-menu-button.arrival-mode {\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,.88);\n            }\n\n            #twy-stand-button {\n                \n                position: absolute;\n                top: calc(100% + 4px);\n                right: 0;\n                z-index: 4;\n            }\n\n            \n            #twy-stand-button.selected {\n                color: inherit;\n                background: inherit;\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,.88);\n            }\n\n            #twy-stand-button.selected:hover {\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,1);\n            }\n\n\n            #twy-map-button {\n                position: absolute;\n                top: calc(200% + 8px);\n                right: 0;\n                z-index: 4;\n                min-width: 42px;\n                width: 42px;\n                padding-left: 0;\n                padding-right: 0;\n                font-size: 10px;\n                font-weight: 700;\n                letter-spacing: .45px;\n                line-height: inherit;\n                text-align: center;\n            }\n\n            #twy-map-button.active {\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,.88);\n            }\n\n            #twy-map-button.unavailable,\n            #twy-map-button:disabled {\n                opacity: .35;\n                cursor: default;\n                box-shadow: none;\n            }\n\n            #twy-minimap-window {\n                position: fixed;\n                right: 112px;\n                bottom: 92px;\n                width: 232px;\n                display: none;\n                overflow: hidden;\n                border: 1px solid rgba(255,255,255,.14);\n                border-radius: 6px;\n                background: #15181a;\n                box-shadow: 0 6px 18px rgba(0,0,0,.42);\n                z-index: 2147483600;\n                color: #eef0f1;\n                font-family: Arial, Helvetica, sans-serif;\n                user-select: none;\n            }\n\n            #twy-minimap-window.open { display: block; }\n\n            #twy-minimap-header {\n                height: 28px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                padding: 0 7px 0 9px;\n                border-bottom: 1px solid rgba(255,255,255,.10);\n                background: #202326;\n                cursor: move;\n            }\n\n            #twy-minimap-logo {\n                display: block;\n                width: auto;\n                height: 12px;\n                opacity: .92;\n                filter:\n                    drop-shadow(0 1px 1px rgba(0,0,0,.72))\n                    drop-shadow(0 0 3px rgba(0,0,0,.30));\n            }\n\n            #twy-minimap-controls {\n                display: flex;\n                align-items: center;\n                gap: 2px;\n            }\n\n            #twy-minimap-range {\n                min-width: 43px;\n                color: #aeb4b8;\n                font-size: 7px;\n                font-weight: 700;\n                text-align: center;\n                letter-spacing: .2px;\n            }\n\n            #twy-minimap-lock,\n            #twy-minimap-zoom-in,\n            #twy-minimap-zoom-out,\n            #twy-minimap-close {\n                width: 22px;\n                height: 20px;\n                padding: 0;\n                border: 0;\n                border-radius: 3px;\n                background: transparent;\n                color: #aeb4b8;\n                cursor: pointer;\n                font: 700 13px Arial;\n                line-height: 20px;\n                text-align: center;\n            }\n\n            #twy-minimap-lock {\n                width: 42px;\n                font-size: 7px;\n                letter-spacing: .25px;\n            }\n\n            #twy-minimap-lock.active {\n                color: #ffe263;\n                background: rgba(255,210,26,.10);\n            }\n\n            #twy-minimap-lock:hover,\n            #twy-minimap-zoom-in:hover,\n            #twy-minimap-zoom-out:hover,\n            #twy-minimap-close:hover {\n                color: #fff;\n                background: rgba(255,255,255,.07);\n            }\n\n            #twy-minimap-lock:disabled,\n            #twy-minimap-zoom-in:disabled,\n            #twy-minimap-zoom-out:disabled {\n                opacity: .28;\n                cursor: default;\n                background: transparent;\n            }\n\n            #twy-minimap-canvas {\n                display: block;\n                margin: 6px;\n                border: 1px solid rgba(255,255,255,.08);\n                background: #15181a;\n                cursor: grab;\n            }\n\n            #twy-minimap-canvas:active {\n                cursor: grabbing;\n            }\n\n            #twy-stand-panel {\n                position: absolute;\n                top: calc(100% + 4px);\n                right: 48px;\n\n                width: 226px;\n                padding: 11px;\n\n                display: none;\n\n                border: 1px solid rgba(255,255,255,.12);\n                border-radius: 7px;\n                background: rgba(25,27,30,.98);\n                box-shadow: 0 6px 18px rgba(0,0,0,.34);\n                color: #e8eaec;\n\n                z-index: 1000002;\n            }\n\n            #twy-stand-panel.open {\n                display: block;\n            }\n\n            .twy-stand-search-row {\n                display: flex;\n                gap: 5px;\n                margin-top: 8px;\n            }\n\n            #twy-stand-input {\n                min-width: 0;\n                flex: 1 1 auto;\n                height: 28px;\n\n                padding: 0 8px;\n\n                border: 1px solid rgba(255,255,255,.14);\n                border-radius: 4px;\n                outline: none;\n\n                background: #202326;\n                color: #f0f1f2;\n\n                font: 600 10px Arial, Helvetica, sans-serif;\n            }\n\n            #twy-stand-input:focus {\n                border-color: rgba(255,210,26,.65);\n            }\n\n            #twy-stand-find {\n                flex: 0 0 45px;\n                height: 28px;\n\n                border: 1px solid rgba(255,255,255,.11);\n                border-radius: 4px;\n\n                background: #4c4933;\n                color: #f3e9a5;\n\n                cursor: pointer;\n                font-size: 9px;\n                font-weight: 700;\n            }\n\n            #twy-stand-find:hover {\n                background: #5b573a;\n            }\n\n            #twy-stand-locator-status {\n                min-height: 14px;\n                margin-top: 8px;\n\n                color: #92989d;\n                font-size: 8px;\n                line-height: 1.35;\n            }\n\n            #twy-stand-locator-status[data-mode="selected"] {\n                color: #cfd8d1;\n            }\n\n            #twy-stand-locator-status[data-mode="error"] {\n                color: #d8a6a6;\n            }\n\n            .twy-stand-marshaller-row {\n                margin-top: 7px;\n                padding-top: 7px;\n                border-top: 1px solid rgba(255,255,255,.07);\n            }\n\n            .twy-marshaller-offset-row {\n                min-height: 24px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 8px;\n            }\n\n            .twy-marshaller-offset-label {\n                color: #858b90;\n                font-size: 7px;\n                font-weight: 700;\n                letter-spacing: .35px;\n            }\n\n            .twy-marshaller-offset-controls {\n                display: flex;\n                align-items: center;\n                gap: 3px;\n            }\n\n            #twy-marshaller-offset-minus,\n            #twy-marshaller-offset-plus {\n                width: 21px;\n                height: 19px;\n                padding: 0;\n                border: 1px solid rgba(255,255,255,.10);\n                border-radius: 3px;\n                background: #34383c;\n                color: #d5d8da;\n                cursor: pointer;\n                font: 700 11px Arial;\n                line-height: 17px;\n            }\n\n            #twy-marshaller-offset-minus:hover,\n            #twy-marshaller-offset-plus:hover {\n                background: #41464b;\n            }\n\n            #twy-marshaller-offset-minus:disabled,\n            #twy-marshaller-offset-plus:disabled {\n                opacity: .3;\n                cursor: default;\n            }\n\n            #twy-marshaller-offset-value {\n                min-width: 34px;\n                color: #cfd2d4;\n                font-size: 8px;\n                font-weight: 700;\n                text-align: center;\n            }\n\n            #twy-stand-clear {\n                width: 100%;\n                height: 25px;\n                margin-top: 7px;\n\n                border: 1px solid rgba(255,255,255,.10);\n                border-radius: 4px;\n\n                background: #34383c;\n                color: #c9cccf;\n\n                cursor: pointer;\n                font-size: 8px;\n                font-weight: 600;\n            }\n\n            #twy-stand-clear:hover {\n                background: #41464b;\n            }\n\n            #twy-notif-button {\n                \n                position: absolute;\n                top: 0;\n                right: 46px;\n\n                min-width: 46px;\n                width: 46px;\n                padding-left: 0;\n                padding-right: 0;\n                font-size: 9px;\n                font-weight: 700;\n                letter-spacing: .35px;\n                text-align: center;\n                transition: background .15s ease, opacity .15s ease;\n                z-index: 3;\n            }\n\n            #twy-notif-button.notif-on {\n                background: rgba(86,127,96,.88);\n                color: #f4f6f4;\n            }\n\n            #twy-notif-button.notif-off {\n                background: rgba(55,58,62,.76);\n                color: #9ca1a5;\n                opacity: .78;\n            }\n\n\n            #twy-arrival-host {\n                position: fixed !important;\n                left: 50vw !important;\n                top: clamp(118px, 16vh, 170px) !important;\n                transform: translateX(-50%) !important;\n\n                width: min(430px, calc(100vw - 24px));\n                max-width: calc(100vw - 24px);\n\n                display: none;\n                pointer-events: auto;\n\n                z-index: 2147483647 !important;\n                font-family: Arial, Helvetica, sans-serif;\n            }\n\n            #twy-arrival-host.open {\n                display: block;\n            }\n\n            .twy-arrival-card {\n                width: 100%;\n                padding: 14px;\n\n                border: 1px solid rgba(255,255,255,.13);\n                border-left: 4px solid #FFD21A;\n                border-radius: 7px;\n\n                background: rgba(17,19,21,.98);\n                box-shadow: 0 8px 26px rgba(0,0,0,.44);\n\n                color: #f0f1f2;\n                cursor: grab;\n            }\n\n            .twy-arrival-card:active {\n                cursor: grabbing;\n            }\n\n            .twy-arrival-card button,\n            .twy-arrival-card input {\n                cursor: pointer;\n            }\n\n            .twy-arrival-title {\n                font-size: 11px;\n                font-weight: 800;\n                letter-spacing: .9px;\n                text-align: center;\n                cursor: grab;\n            }\n\n            .twy-arrival-subtitle {\n                margin-top: 4px;\n                color: #92989d;\n                font-size: 8px;\n                text-align: center;\n                cursor: grab;\n            }\n\n            .twy-arrival-loading,\n            .twy-arrival-error {\n                margin: 14px 0 10px;\n                padding: 10px;\n\n                border-radius: 5px;\n                background: #24272a;\n\n                color: #c9cccf;\n                font-size: 9px;\n                text-align: center;\n            }\n\n            .twy-arrival-error {\n                color: #d8a6a6;\n            }\n\n            .twy-arrival-list {\n                display: grid;\n                gap: 5px;\n                margin-top: 11px;\n            }\n\n            .twy-arrival-choice {\n                position: relative;\n                width: 100%;\n                min-height: 54px;\n                padding: 8px 70px 8px 10px;\n\n                border: 1px solid rgba(255,255,255,.09);\n                border-radius: 5px;\n\n                background: #272a2d;\n                color: #f0f1f2;\n\n                cursor: pointer;\n                text-align: left;\n            }\n\n            .twy-arrival-choice:hover {\n                border-color: rgba(255,210,26,.42);\n                background: #303438;\n            }\n\n            .twy-arrival-choice-main {\n                display: flex;\n                align-items: center;\n                gap: 6px;\n            }\n\n            .twy-arrival-code {\n                font-size: 12px;\n                font-weight: 800;\n                letter-spacing: .35px;\n            }\n\n            .twy-arrival-ahead {\n                padding: 2px 4px;\n                border-radius: 3px;\n                background: rgba(255,210,26,.14);\n                color: #e5cf70;\n                font-size: 7px;\n                font-weight: 700;\n                letter-spacing: .4px;\n            }\n\n            .twy-arrival-name {\n                margin-top: 3px;\n                overflow: hidden;\n\n                color: #9fa5aa;\n                font-size: 8px;\n                white-space: nowrap;\n                text-overflow: ellipsis;\n            }\n\n            .twy-arrival-distance {\n                position: absolute;\n                right: 10px;\n                top: 50%;\n                transform: translateY(-50%);\n\n                color: #d9dadd;\n                font-size: 10px;\n                font-weight: 700;\n            }\n\n            .twy-arrival-cancel,\n            .twy-arrival-retry {\n                height: 27px;\n                margin-top: 10px;\n\n                border: 1px solid rgba(255,255,255,.10);\n                border-radius: 4px;\n\n                background: #34383c;\n                color: #c9cccf;\n\n                cursor: pointer;\n                font-size: 8px;\n                font-weight: 700;\n            }\n\n            .twy-arrival-cancel {\n                width: 100%;\n            }\n\n            .twy-arrival-actions {\n                display: flex;\n                gap: 6px;\n                margin-top: 10px;\n            }\n\n            .twy-arrival-actions .twy-arrival-retry,\n            .twy-arrival-actions .twy-arrival-cancel {\n                flex: 1 1 0;\n                width: auto;\n                margin-top: 0;\n            }\n\n            .twy-arrival-cancel:hover,\n            .twy-arrival-retry:hover {\n                background: #41464b;\n            }\n\n            #twy-notification-host {\n                \n                position: fixed !important;\n                left: 50vw !important;\n                top: clamp(64px, 9vh, 96px) !important;\n                right: auto !important;\n                bottom: auto !important;\n                transform: translateX(-50%) !important;\n\n                width: min(380px, calc(100vw - 24px));\n                max-width: calc(100vw - 24px);\n\n                pointer-events: none !important;\n                visibility: visible !important;\n                overflow: visible !important;\n\n                \n                z-index: 2147483647 !important;\n\n                font-family: Arial, Helvetica, sans-serif;\n            }\n\n            .twy-notification-card {\n                width: 100%;\n                min-width: 0;\n                padding: 14px 18px 13px;\n                border: 1px solid rgba(255,255,255,.13);\n                border-left: 4px solid #d3b95e;\n                border-radius: 7px;\n                background: rgba(17,19,21,.97);\n                box-shadow: 0 8px 24px rgba(0,0,0,.40);\n                color: #f0f1f2;\n                text-align: center;\n                opacity: 0;\n                transform: translateY(-10px) scale(.985);\n                transition: opacity .18s ease, transform .18s ease;\n            }\n\n            .twy-notification-card.show {\n                opacity: 1;\n                transform: translateY(0) scale(1);\n            }\n\n            .twy-notification-card.warning { border-left-color: #d7a84d; }\n            .twy-notification-card.runway { border-left-color: #c86565; }\n            .twy-notification-card.success { border-left-color: #6f9f79; }\n            .twy-notification-card.taxi { border-left-color: #d3b95e; }\n\n            .twy-notification-title {\n                font-size: 10px;\n                line-height: 1;\n                font-weight: 700;\n                letter-spacing: .95px;\n                color: #aeb3b7;\n            }\n\n            .twy-notification-value {\n                margin-top: 5px;\n                font-size: 25px;\n                line-height: 1.05;\n                font-weight: 800;\n                letter-spacing: .5px;\n                color: #fff;\n            }\n\n            .twy-notification-meta {\n                margin-top: 5px;\n                font-size: 9px;\n                line-height: 1.2;\n                color: #aeb3b7;\n            }\n\n            #twy-panel {\n                position: absolute;\n                top: calc(100% + 6px);\n                right: 0;\n                width: 220px;\n                padding: 11px;\n                display: none;\n                border: 1px solid rgba(255,255,255,.12);\n                border-radius: 7px;\n                background: rgba(25,27,30,.98);\n                box-shadow: 0 6px 18px rgba(0,0,0,.34);\n                color: #e8eaec;\n                z-index: 1000000;\n            }\n\n            #twy-panel.open { display: block; }\n\n            .twy-title { font-size: 11px; font-weight: 700; }\n            .twy-subtitle { margin-top: 2px; color: #858b90; font-size: 8px; }\n\n            .twy-section {\n                margin-top: 9px;\n                padding-top: 8px;\n                border-top: 1px solid rgba(255,255,255,.07);\n            }\n\n            .twy-row {\n                min-height: 24px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 10px;\n            }\n\n            .twy-label { color: #cfd2d4; font-size: 9px; font-weight: 600; }\n\n            .twy-switch {\n                position: relative;\n                width: 36px;\n                height: 20px;\n                padding: 0;\n                flex: 0 0 auto;\n                border: 1px solid rgba(255,255,255,.12);\n                border-radius: 11px;\n                background: #4a4f54;\n                cursor: pointer;\n            }\n\n            .twy-switch.on { background: #567f60; }\n\n            .twy-knob {\n                position: absolute;\n                left: 2px;\n                top: 2px;\n                width: 14px;\n                height: 14px;\n                border-radius: 50%;\n                background: #f2f2f2;\n                box-shadow: 0 1px 2px rgba(0,0,0,.32);\n                transition: transform .15s ease;\n            }\n\n            #twy-status { margin-top: 9px; color: #c8cccf; font-size: 9px; }\n\n            .twy-dot {\n                display: inline-block;\n                width: 6px;\n                height: 6px;\n                margin-right: 5px;\n                border-radius: 50%;\n                vertical-align: 1px;\n            }\n\n            .twy-dot.idle { background: #8e9499; }\n            .twy-dot.loading { background: #d2b85f; }\n            .twy-dot.ready { background: #7eae87; }\n            .twy-dot.error { background: #c27e7e; }\n\n            .twy-progress-bg {\n                width: 100%;\n                height: 3px;\n                margin-top: 7px;\n                overflow: hidden;\n                border-radius: 3px;\n                background: #34383c;\n            }\n\n            #twy-progress-fill {\n                width: 0%;\n                height: 100%;\n                border-radius: 3px;\n                background: #d3b95e;\n                transition: width .2s ease;\n            }\n\n            #twy-details {\n                min-height: 10px;\n                margin-top: 5px;\n                color: #858b90;\n                font-size: 8px;\n                line-height: 1.35;\n            }\n\n\n            #twy-modify-arr-wrap {\n                display: none;\n                margin-top: 9px;\n                padding-top: 9px;\n                border-top: 1px solid rgba(255,255,255,.07);\n            }\n\n            #twy-modify-arr-wrap.visible {\n                display: block;\n            }\n\n            #twy-modify-arr-button {\n                position: relative;\n\n                width: 100%;\n                min-height: 43px;\n                padding: 7px 10px 6px;\n\n                overflow: hidden;\n\n                border: 1px solid rgba(217,183,78,.33);\n                border-radius: 5px;\n\n                background:\n                    linear-gradient(\n                        180deg,\n                        rgba(68,66,53,.88),\n                        rgba(47,48,46,.94)\n                    );\n\n                color: #e5ddbb;\n\n                cursor: pointer;\n                text-align: center;\n\n                box-shadow:\n                    inset 0 1px 0 rgba(255,255,255,.06),\n                    0 1px 3px rgba(0,0,0,.24);\n\n                transition:\n                    border-color .12s ease,\n                    background .12s ease,\n                    box-shadow .12s ease,\n                    transform .08s ease;\n            }\n\n            \n            #twy-modify-arr-button::before,\n            #twy-modify-arr-button::after {\n                content: "";\n                position: absolute;\n                top: 4px;\n                bottom: 4px;\n                width: 1px;\n                background: rgba(255,255,255,.09);\n                pointer-events: none;\n            }\n\n            #twy-modify-arr-button::before { left: 9px; }\n            #twy-modify-arr-button::after { right: 9px; }\n\n            #twy-modify-arr-button:hover {\n                border-color: rgba(230,198,91,.52);\n                background:\n                    linear-gradient(\n                        180deg,\n                        rgba(76,73,56,.92),\n                        rgba(52,53,49,.96)\n                    );\n            }\n\n            #twy-modify-arr-button:active {\n                transform: translateY(1px);\n            }\n\n            #twy-modify-arr-button.armed {\n                border-color: rgba(201,101,101,.80);\n\n                background:\n                    linear-gradient(\n                        180deg,\n                        rgba(92,48,48,.96),\n                        rgba(57,36,37,.98)\n                    );\n\n                color: #f2d9d9;\n\n                box-shadow:\n                    inset 0 0 0 1px rgba(255,255,255,.04),\n                    0 0 0 1px rgba(201,101,101,.10),\n                    0 2px 7px rgba(0,0,0,.30);\n            }\n\n            .twy-modify-arr-title {\n                display: block;\n\n                font-size: 10px;\n                line-height: 1.1;\n                font-weight: 800;\n                letter-spacing: .65px;\n            }\n\n            .twy-modify-arr-safe,\n            .twy-modify-arr-confirm {\n                display: block;\n                margin-top: 5px;\n\n                font-size: 7px;\n                line-height: 1;\n                font-weight: 700;\n                letter-spacing: .8px;\n            }\n\n            .twy-modify-arr-safe {\n                color: #9d9b8e;\n            }\n\n            .twy-modify-arr-confirm {\n                color: #e9b8b8;\n            }\n\n            .twy-actions { display: flex; gap: 5px; margin-top: 8px; }\n\n            #twy-load-button,\n            #twy-reset-button {\n                height: 27px;\n                border: 1px solid rgba(255,255,255,.11);\n                border-radius: 4px;\n                background: #383c40;\n                color: #e8e9ea;\n                cursor: pointer;\n                font-size: 9px;\n                font-weight: 600;\n            }\n\n            #twy-load-button { flex: 1 1 auto; }\n            #twy-reset-button { flex: 0 0 52px; color: #d9b9b9; }\n\n            #twy-load-button:hover:not(:disabled),\n            #twy-reset-button:hover { background: #44494e; }\n\n            #twy-load-button:disabled { opacity: .55; cursor: default; }\n\n            .twy-spinner {\n                display: inline-block;\n                width: 8px;\n                height: 8px;\n                margin-right: 4px;\n                border: 1.2px solid rgba(255,255,255,.20);\n                border-top-color: #d3b95e;\n                border-radius: 50%;\n                vertical-align: -1px;\n                animation: twy-spin .8s linear infinite;\n            }\n\n            @keyframes twy-spin { to { transform: rotate(360deg); } }\n\n            #geofs-twy-ui.fallback {\n                position: fixed;\n                right: 12px;\n                bottom: 76px;\n                z-index: 999999;\n            }\n        `;
+        document.head.appendChild(style);
+        const root = document.createElement("div");
+        root.id = "geofs-twy-ui";
+        const brand = document.createElement("div");
+        brand.id = "twy-brand";
+        brand.innerHTML = `<img src="${BRAND_LOGO}" alt=""><span>IMMERSIVE AIRPORTS</span>`;
+        const menuButton = document.createElement("button");
+        menuButton.id = "twy-menu-button";
+        menuButton.className = "geofs-button";
+        menuButton.textContent = "TWY";
+        menuButton.title = "Airport ground overlay";
+        const notificationButton = document.createElement("button");
+        notificationButton.id = "twy-notif-button";
+        notificationButton.className = "geofs-button";
+        notificationButton.textContent = "NOTIF";
+        notificationButton.title = "Airport awareness notifications";
+        const standButton = document.createElement("button");
+        standButton.id = "twy-stand-button";
+        standButton.className = "geofs-button";
+        standButton.textContent = "STD";
+        standButton.title = "Find a stand / gate";
+        const mapButton = document.createElement("button");
+        mapButton.id = "twy-map-button";
+        mapButton.className = "geofs-button";
+        mapButton.textContent = "MAP";
+        mapButton.title = "Airport moving map";
+        const standPanel = document.createElement("div");
+        standPanel.id = "twy-stand-panel";
+        standPanel.innerHTML = `\n            <div class="twy-title">Stand locator</div>\n\n            <div class="twy-stand-search-row">\n                <input\n                    id="twy-stand-input"\n                    type="text"\n                    autocomplete="off"\n                    spellcheck="false"\n                    placeholder="e.g. 224"\n                />\n                <button id="twy-stand-find">FIND</button>\n            </div>\n\n            <div id="twy-stand-locator-status">Load an airport first</div>\n\n            <div class="twy-row twy-stand-marshaller-row">\n                <div class="twy-label">Marshaller guidance</div>\n                <button id="twy-marshaller-toggle" class="twy-switch">\n                    <span class="twy-knob"></span>\n                </button>\n            </div>\n\n            <div class="twy-marshaller-offset-row">\n                <span class="twy-marshaller-offset-label">STOP OFFSET ±</span>\n\n                <div class="twy-marshaller-offset-controls">\n                    <button id="twy-marshaller-offset-minus">−</button>\n                    <span id="twy-marshaller-offset-value">12 m</span>\n                    <button id="twy-marshaller-offset-plus">+</button>\n                </div>\n            </div>\n\n            <button id="twy-stand-clear">CLEAR LOCATOR</button>\n        `;
+        const panel = document.createElement("div");
+        panel.id = "twy-panel";
+        panel.innerHTML = `\n            <div class="twy-title">Airport ground</div>\n\n            <div class="twy-section">\n                <div class="twy-row">\n                    <div class="twy-label">Taxiway labels</div>\n                    <button id="twy-label-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n\n                <div class="twy-row">\n                    <div class="twy-label">Stand lead-in lines</div>\n                    <button id="twy-leadin-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n\n                <div class="twy-row">\n                    <div class="twy-label">Stand numbers</div>\n                    <button id="twy-stand-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n\n                <div class="twy-row">\n                    <div class="twy-label">Auto-load airports</div>\n                    <button id="twy-autoload-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n            </div>\n\n            <div id="twy-status">\n                <span id="twy-status-dot" class="twy-dot idle"></span>\n                <span id="twy-status-text">Ready</span>\n            </div>\n\n            <div class="twy-progress-bg">\n                <div id="twy-progress-fill"></div>\n            </div>\n\n            <div id="twy-details"></div>\n\n            <div id="twy-modify-arr-wrap">\n                <button id="twy-modify-arr-button">\n                    <span class="twy-modify-arr-title">MODIFY ARR</span>\n                    <span class="twy-modify-arr-safe">GUARDED</span>\n                </button>\n            </div>\n\n            <div class="twy-actions">\n                <button id="twy-load-button">Load airport</button>\n                <button id="twy-reset-button">Reset</button>\n            </div>\n        `;
+        root.append(brand, menuButton, notificationButton, standButton, mapButton, standPanel, panel);
+        const minimapWindow = document.createElement("div");
+        minimapWindow.id = "twy-minimap-window";
+        minimapWindow.innerHTML = `\n            <div id="twy-minimap-header">\n                <img id="twy-minimap-logo" src="${BRAND_LOGO}" alt="">\n\n                <div id="twy-minimap-controls">\n                    <button id="twy-minimap-lock" title="Map is following the aircraft">FOLLOW</button>\n                    <button id="twy-minimap-zoom-out" title="Zoom out">−</button>\n                    <span id="twy-minimap-range">0.7 NM</span>\n                    <button id="twy-minimap-zoom-in" title="Zoom in">+</button>\n                    <button id="twy-minimap-close" title="Close map">×</button>\n                </div>\n            </div>\n\n            <canvas id="twy-minimap-canvas"></canvas>\n        `;
+        document.body.appendChild(minimapWindow);
+        const notificationHost = document.createElement("div");
+        notificationHost.id = "twy-notification-host";
+        document.body.appendChild(notificationHost);
+        const arrivalChooserHost = document.createElement("div");
+        arrivalChooserHost.id = "twy-arrival-host";
+        document.body.appendChild(arrivalChooserHost);
+        arrivalChooserHost.addEventListener("mousedown", startArrivalChooserDrag);
+        document.addEventListener("mousemove", moveArrivalChooserDrag);
+        document.addEventListener("mouseup", endArrivalChooserDrag);
+        const geofsRight = document.querySelector(".geofs-ui-right");
+        const pads = geofsRight?.querySelector(".geofs-pads-container");
+        if (geofsRight) {
+            if (pads) geofsRight.insertBefore(root, pads); else geofsRight.appendChild(root);
+        } else {
+            root.classList.add("fallback");
+            document.body.appendChild(root);
+        }
+        state.root = root;
+        state.panel = panel;
+        state.menuButton = menuButton;
+        state.standButton = standButton;
+        state.standPanel = standPanel;
+        state.standInput = standPanel.querySelector("#twy-stand-input");
+        state.standFindButton = standPanel.querySelector("#twy-stand-find");
+        state.standClearButton = standPanel.querySelector("#twy-stand-clear");
+        state.standLocatorStatus = standPanel.querySelector("#twy-stand-locator-status");
+        state.marshallerToggle = standPanel.querySelector("#twy-marshaller-toggle");
+        state.marshallerOffsetValue = standPanel.querySelector("#twy-marshaller-offset-value");
+        state.marshallerOffsetMinus = standPanel.querySelector("#twy-marshaller-offset-minus");
+        state.marshallerOffsetPlus = standPanel.querySelector("#twy-marshaller-offset-plus");
+        state.minimapButton = mapButton;
+        state.minimapWindow = minimapWindow;
+        state.minimapCanvas = minimapWindow.querySelector("#twy-minimap-canvas");
+        state.notificationButton = notificationButton;
+        state.notificationHost = notificationHost;
+        state.arrivalChooserHost = arrivalChooserHost;
+        state.statusEl = document.getElementById("twy-status-text");
+        state.statusDot = document.getElementById("twy-status-dot");
+        state.detailsEl = document.getElementById("twy-details");
+        state.progressFill = document.getElementById("twy-progress-fill");
+        state.loadButton = document.getElementById("twy-load-button");
+        state.resetButton = document.getElementById("twy-reset-button");
+        state.taxiLabelToggle = document.getElementById("twy-label-toggle");
+        state.standNumberToggle = document.getElementById("twy-stand-toggle");
+        state.standLeadInToggle = document.getElementById("twy-leadin-toggle");
+        state.autoLoadToggle = document.getElementById("twy-autoload-toggle");
+        state.modifyArrivalWrap = document.getElementById("twy-modify-arr-wrap");
+        state.modifyArrivalButton = document.getElementById("twy-modify-arr-button");
+        mapButton.onclick = event => {
+            event.stopPropagation();
+            toggleMinimap();
+        };
+        minimapWindow.querySelector("#twy-minimap-close")?.addEventListener("click", event => {
+            event.stopPropagation();
+            setMinimapOpen(false);
+        });
+        minimapWindow.querySelector("#twy-minimap-zoom-in")?.addEventListener("click", event => {
+            event.stopPropagation();
+            minimapZoomIn();
+        });
+        minimapWindow.querySelector("#twy-minimap-zoom-out")?.addEventListener("click", event => {
+            event.stopPropagation();
+            minimapZoomOut();
+        });
+        minimapWindow.querySelector("#twy-minimap-lock")?.addEventListener("click", event => {
+            event.stopPropagation();
+            toggleMinimapPanLock();
+        });
+        minimapWindow.querySelector("#twy-minimap-header")?.addEventListener("mousedown", startMinimapDrag);
+        state.minimapCanvas?.addEventListener("mousedown", startMinimapCanvasPan);
+        document.addEventListener("mousemove", event => {
+            moveMinimapDrag(event);
+            moveMinimapCanvasPan(event);
+        });
+        document.addEventListener("mouseup", () => {
+            endMinimapDrag();
+            endMinimapCanvasPan();
+        });
+        restoreMinimapPosition();
+        updateMinimapControls();
+        updateMinimapAvailability();
+        setMinimapOpen(state.minimapOpen);
+        menuButton.onclick = event => {
+            event.stopPropagation();
+            standPanel.classList.remove("open");
+            standButton.classList.remove("active");
+            if (state.arrivalMode) {
+                panel.classList.remove("open");
+                menuButton.classList.remove("active");
+                openArrivalChooser();
+                return;
+            }
+            closeArrivalChooser();
+            const open = panel.classList.toggle("open");
+            menuButton.classList.toggle("active", open);
+        };
+        standButton.onclick = event => {
+            event.stopPropagation();
+            panel.classList.remove("open");
+            menuButton.classList.remove("active");
+            const open = standPanel.classList.toggle("open");
+            standButton.classList.toggle("active", open);
+            if (open) {
+                updateStandLocatorStatus();
+                setTimeout(() => {
+                    state.standInput?.focus();
+                    state.standInput?.select();
+                }, 0);
+            }
+        };
+        notificationButton.onclick = event => {
+            event.stopPropagation();
+            toggleNotifications();
+        };
+        document.addEventListener("click", event => {
+            if (!root.contains(event.target)) {
+                panel.classList.remove("open");
+                menuButton.classList.remove("active");
+                standPanel.classList.remove("open");
+                standButton.classList.remove("active");
+            }
+        });
+        state.taxiLabelToggle.onclick = event => {
+            event.stopPropagation();
+            toggleTaxiwayLabels();
+        };
+        state.standLeadInToggle.onclick = event => {
+            event.stopPropagation();
+            toggleStandLeadIns();
+        };
+        state.standNumberToggle.onclick = event => {
+            event.stopPropagation();
+            toggleStandNumbers();
+        };
+        state.autoLoadToggle.onclick = event => {
+            event.stopPropagation();
+            toggleAutoLoad();
+        };
+        state.standFindButton.onclick = event => {
+            event.stopPropagation();
+            selectStand(state.standInput.value);
+        };
+        state.standClearButton.onclick = event => {
+            event.stopPropagation();
+            clearStandSelection();
+        };
+        state.marshallerToggle.onclick = event => {
+            event.stopPropagation();
+            toggleMarshaller();
+        };
+        state.marshallerOffsetMinus.onclick = event => {
+            event.stopPropagation();
+            adjustMarshallerStopOffset(-CFG.marshallerStopOffsetStepM);
+        };
+        state.marshallerOffsetPlus.onclick = event => {
+            event.stopPropagation();
+            adjustMarshallerStopOffset(CFG.marshallerStopOffsetStepM);
+        };
+        updateMarshallerOffsetUI();
+        state.standInput.onclick = event => {
+            event.stopPropagation();
+        };
+        state.standInput.onkeydown = event => {
+            event.stopPropagation();
+            if (event.key === "Enter") {
+                event.preventDefault();
+                selectStand(state.standInput.value);
+            }
+            if (event.key === "Escape") {
+                standPanel.classList.remove("open");
+                standButton.classList.remove("active");
+            }
+        };
+        state.modifyArrivalButton.onclick = event => {
+            event.stopPropagation();
+            handleModifyArrivalPress();
+        };
+        state.loadButton.onclick = event => {
+            event.stopPropagation();
+            loadAirport();
+        };
+        state.resetButton.onclick = event => {
+            event.stopPropagation();
+            resetAirport();
+        };
+        updateStandLocatorStatus();
+        updateUI();
+    }
+    function fpe(num) {
+        return Number(num.toFixed(3));
+    }
+    function makeChunks(center) {
+        const chunks = [];
+        const cs = CFG.chunkSize;
+        const baseLat = Math.floor(center.lat / cs) * cs;
+        const baseLon = Math.floor(center.lon / cs) * cs;
+        for (let v = -CFG.gridRadius; v <= CFG.gridRadius; v++) {
+            for (let h = -CFG.gridRadius; h <= CFG.gridRadius; h++) {
+                chunks.push({
+                    south: fpe(baseLat + v * cs),
+                    west: fpe(baseLon + h * cs),
+                    north: fpe(baseLat + (v + 1) * cs),
+                    east: fpe(baseLon + (h + 1) * cs)
+                });
+            }
+        }
+        chunks.sort((a, b) => {
+            const aLat = (a.south + a.north) / 2;
+            const aLon = (a.west + a.east) / 2;
+            const bLat = (b.south + b.north) / 2;
+            const bLon = (b.west + b.east) / 2;
+            const da = (aLat - center.lat) ** 2 + (aLon - center.lon) ** 2;
+            const db = (bLat - center.lat) ** 2 + (bLon - center.lon) ** 2;
+            return da - db;
+        });
+        return chunks.map((chunk, index) => ({
+            ...chunk,
+            index: index,
+            key: chunkKey(chunk)
+        }));
+    }
+    function chunkKey(chunk) {
+        return `${chunk.south}_${chunk.west}_${chunk.north}_${chunk.east}`;
+    }
+    function gridSignature(chunks) {
+        return chunks.map(c => c.key).join("|");
+    }
+    function getOverallBounds(chunks) {
+        return {
+            south: Math.min(...chunks.map(c => c.south)),
+            west: Math.min(...chunks.map(c => c.west)),
+            north: Math.max(...chunks.map(c => c.north)),
+            east: Math.max(...chunks.map(c => c.east))
+        };
+    }
+    function cacheKey(chunk) {
+        return CFG.cachePrefix + chunk.key;
+    }
+    function loadChunkCache(chunk) {
+        if (!CFG.cacheEnabled) return null;
+        try {
+            const raw = localStorage.getItem(cacheKey(chunk));
+            if (!raw) return null;
+            const data = JSON.parse(raw);
+            if (!data || !data.dataset) return null;
+            if (Date.now() - data.time > CFG.cacheLifetimeMs) {
+                localStorage.removeItem(cacheKey(chunk));
+                return null;
+            }
+            return data.dataset;
+        } catch (_) {
+            return null;
+        }
+    }
+    function saveChunkCache(chunk, dataset) {
+        if (!CFG.cacheEnabled) return;
+        try {
+            localStorage.setItem(cacheKey(chunk), JSON.stringify({
+                time: Date.now(),
+                dataset: dataset
+            }));
+        } catch (_) {}
+    }
+    function clearGroundCache() {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+            const key = localStorage.key(i);
+            if (!key) continue;
+            if (key.startsWith("geofsGroundChunk_") || key.startsWith("geofsTwyChunk_") || key.startsWith("geofsGround_v") || key.startsWith("geofsTwy_v")) {
+                localStorage.removeItem(key);
+            }
+        }
+    }
+    function featureKey(feature) {
+        return `${feature.osmType}:${feature.id}`;
+    }
+    function mergeFeatureList(targetMap, list) {
+        let added = 0;
+        for (const feature of list || []) {
+            if (!feature) continue;
+            const key = featureKey(feature);
+            if (!targetMap.has(key)) {
+                targetMap.set(key, feature);
+                added++;
+            }
+        }
+        return added;
+    }
+    function mergeDataset(chunk, dataset) {
+        state.chunkData.set(chunk.key, dataset);
+        let added = 0;
+        added += mergeFeatureList(state.taxiways, dataset.taxiways);
+        added += mergeFeatureList(state.taxilanes, dataset.taxilanes);
+        added += mergeFeatureList(state.holdings, dataset.holdings);
+        added += mergeFeatureList(state.parking, dataset.parking);
+        added += mergeFeatureList(state.runways, dataset.runways);
+        added += mergeFeatureList(state.aprons, dataset.aprons);
+        updateUI();
+        return added;
+    }
+    function clearRuntimeData() {
+        state.taxiways = new Map;
+        state.taxilanes = new Map;
+        state.holdings = new Map;
+        state.parking = new Map;
+        state.runways = new Map;
+        state.aprons = new Map;
+        state.chunkData = new Map;
+    }
+    class HttpError extends Error {
+        constructor(status, message) {
+            super(message || `HTTP ${status}`);
+            this.name = "HttpError";
+            this.status = status;
+        }
+    }
+    function classifyCooldown(error) {
+        if (error?.name === "AbortError") return CFG.cooldownTimeoutMs;
+        if (error instanceof HttpError && error.status === 429) return CFG.cooldown429Ms;
+        if (error instanceof HttpError && error.status >= 500) return CFG.cooldownServerErrorMs;
+        return CFG.cooldownOtherMs;
+    }
+    function markServerSuccess(index) {
+        const health = state.serverHealth[index];
+        health.cooldownUntil = 0;
+        health.failures = 0;
+        health.successes++;
+        state.preferredServerIndex = index;
+    }
+    function markServerFailure(index, error) {
+        const health = state.serverHealth[index];
+        health.failures++;
+        health.cooldownUntil = Date.now() + classifyCooldown(error);
+    }
+    function serverOrder() {
+        const now = Date.now();
+        const indices = OVERPASS_SERVERS.map((_, index) => index);
+        indices.sort((a, b) => {
+            const aPreferred = a === state.preferredServerIndex ? 0 : 1;
+            const bPreferred = b === state.preferredServerIndex ? 0 : 1;
+            const aCooling = state.serverHealth[a].cooldownUntil > now ? 1 : 0;
+            const bCooling = state.serverHealth[b].cooldownUntil > now ? 1 : 0;
+            if (aCooling !== bCooling) return aCooling - bCooling;
+            if (aPreferred !== bPreferred) return aPreferred - bPreferred;
+            return state.serverHealth[a].cooldownUntil - state.serverHealth[b].cooldownUntil;
+        });
+        return indices;
+    }
+    function waitForRequestGate() {
+        const task = state.requestGate.then(async () => {
+            const now = Date.now();
+            const wait = Math.max(0, CFG.requestSpacingMs - (now - state.lastRequestStart));
+            if (wait > 0) await sleep(wait);
+            state.lastRequestStart = Date.now();
+        });
+        state.requestGate = task.catch(() => {});
+        return task;
+    }
+    function cleanRef(raw) {
+        if (typeof raw !== "string") return null;
+        return raw.trim() || null;
+    }
+    function buildChunkQuery(chunk) {
+        const bbox = `${fpe(chunk.south)},${fpe(chunk.west)},${fpe(chunk.north)},${fpe(chunk.east)}`;
+        return `\n[out:json][timeout:15];\n(\n    way["aeroway"="taxiway"](${bbox});\n    way["aeroway"="taxilane"](${bbox});\n\n    way["aeroway"="holding_position"](${bbox});\n    node["aeroway"="holding_position"](${bbox});\n\n    way["aeroway"="parking_position"](${bbox});\n    node["aeroway"="parking_position"](${bbox});\n\n    way["aeroway"="apron"](${bbox});\n    way["aeroway"="runway"](${bbox});\n);\nout body;\n>;\nout skel qt;\n`;
+    }
+    function parseDataset(data, chunk) {
+        const nodes = new Map;
+        for (const element of data.elements || []) {
+            if (element.type === "node" && Number.isFinite(Number(element.lat)) && Number.isFinite(Number(element.lon))) {
+                nodes.set(element.id, element);
+            }
+        }
+        const dataset = {
+            taxiways: [],
+            taxilanes: [],
+            holdings: [],
+            parking: [],
+            runways: [],
+            aprons: []
+        };
+        for (const element of data.elements || []) {
+            if (element.type !== "node" || !element.tags) continue;
+            const aeroway = element.tags.aeroway;
+            if (aeroway !== "holding_position" && aeroway !== "parking_position") continue;
+            const lat = Number(element.lat);
+            const lon = Number(element.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+            const feature = {
+                id: element.id,
+                osmType: "node",
+                chunkKey: chunk.key,
+                point: {
+                    lat: lat,
+                    lon: lon
+                },
+                tags: element.tags,
+                ref: cleanRef(element.tags.ref)
+            };
+            if (aeroway === "holding_position") {
+                feature.holdType = cleanRef(element.tags["holding_position:type"]);
+                dataset.holdings.push(feature);
+            } else {
+                dataset.parking.push(feature);
+            }
+        }
+        for (const element of data.elements || []) {
+            if (element.type !== "way" || !Array.isArray(element.nodes) || !element.tags) continue;
+            const points = element.nodes.map(nodeId => nodes.get(nodeId)).filter(Boolean).map(node => ({
+                lat: Number(node.lat),
+                lon: Number(node.lon)
+            })).filter(point => Number.isFinite(point.lat) && Number.isFinite(point.lon));
+            if (points.length < 2) continue;
+            const feature = {
+                id: element.id,
+                osmType: "way",
+                chunkKey: chunk.key,
+                points: points,
+                tags: element.tags,
+                ref: cleanRef(element.tags.ref)
+            };
+            switch (element.tags.aeroway) {
+              case "taxiway":
+                dataset.taxiways.push(feature);
+                break;
+
+              case "taxilane":
+                dataset.taxilanes.push(feature);
+                break;
+
+              case "holding_position":
+                feature.holdType = cleanRef(element.tags["holding_position:type"]);
+                dataset.holdings.push(feature);
+                break;
+
+              case "parking_position":
+                dataset.parking.push(feature);
+                break;
+
+              case "runway":
+                dataset.runways.push(feature);
+                break;
+
+              case "apron":
+                if (points.length >= 3) {
+                    dataset.aprons.push(feature);
+                }
+                break;
+            }
+        }
+        return dataset;
+    }
+    async function requestChunk(chunk, serverIndex, generation) {
+        await waitForRequestGate();
+        if (generation !== state.loadGeneration) {
+            throw new Error("Cancelled");
+        }
+        const controller = new AbortController;
+        state.controllers.add(controller);
+        state.activeRequests++;
+        updateUI();
+        const timeout = setTimeout(() => controller.abort(), CFG.requestTimeoutMs);
+        try {
+            const serverUrl = OVERPASS_SERVERS[serverIndex];
+            console.log("[TWY] Request", {
+                chunk: chunk.index + 1,
+                server: serverIndex + 1,
+                url: serverUrl
+            });
+            const response = await fetch(serverUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+                },
+                body: "data=" + encodeURIComponent(buildChunkQuery(chunk)),
+                signal: controller.signal
+            });
+            if (!response.ok) {
+                throw new HttpError(response.status);
+            }
+            const data = await response.json();
+            if (generation !== state.loadGeneration) throw new Error("Cancelled");
+            return parseDataset(data, chunk);
+        } finally {
+            clearTimeout(timeout);
+            state.controllers.delete(controller);
+            state.activeRequests = Math.max(0, state.activeRequests - 1);
+            updateUI();
+        }
+    }
+    function maybeRequestStagedRender() {
+        if (!state.earlyPreviewRequested && state.successfulChunks >= 1) {
+            state.earlyPreviewRequested = true;
+            requestRender(1, CFG.previewDelayMs);
+        }
+        if (!state.midPreviewRequested && state.completedChunks >= 5) {
+            state.midPreviewRequested = true;
+            requestRender(1, CFG.previewDelayMs);
+        }
+    }
+    async function processChunk(chunk, generation, options = {}) {
+        if (generation !== state.loadGeneration) return false;
+        const retryMode = !!options.retryMode;
+        const cached = loadChunkCache(chunk);
+        if (cached) {
+            if (generation !== state.loadGeneration) return false;
+            mergeDataset(chunk, cached);
+            if (retryMode) {
+                if (state.failedChunkKeys.delete(chunk.key)) {
+                    state.failedChunks = Math.max(0, state.failedChunks - 1);
+                    state.successfulChunks++;
+                }
+            } else {
+                state.cachedChunks++;
+                state.successfulChunks++;
+                state.completedChunks++;
+            }
+            maybeRequestStagedRender();
+            updateUI();
+            return true;
+        }
+        const order = serverOrder();
+        let lastError = null;
+        for (let attempt = 0; attempt < order.length; attempt++) {
+            if (generation !== state.loadGeneration) return false;
+            const serverIndex = order[attempt];
+            const health = state.serverHealth[serverIndex];
+            const now = Date.now();
+            const allCooling = order.every(index => state.serverHealth[index].cooldownUntil > now);
+            if (!allCooling && health.cooldownUntil > now) continue;
+            if (attempt > 0) {
+                const delay = CFG.retryDelaysMs[Math.min(attempt - 1, CFG.retryDelaysMs.length - 1)] || 1200;
+                setStatus(retryMode ? `Recovering area ${chunk.index + 1}: switching server…` : `Area ${chunk.index + 1}: switching server…`, "loading");
+                await sleep(delay);
+            }
+            try {
+                const dataset = await requestChunk(chunk, serverIndex, generation);
+                if (generation !== state.loadGeneration) return false;
+                markServerSuccess(serverIndex);
+                saveChunkCache(chunk, dataset);
+                mergeDataset(chunk, dataset);
+                if (retryMode) {
+                    if (state.failedChunkKeys.delete(chunk.key)) {
+                        state.failedChunks = Math.max(0, state.failedChunks - 1);
+                        state.successfulChunks++;
+                    }
+                } else {
+                    state.successfulChunks++;
+                    state.completedChunks++;
+                }
+                maybeRequestStagedRender();
+                updateUI();
+                return true;
+            } catch (error) {
+                lastError = error;
+                if (generation !== state.loadGeneration) return false;
+                if (String(error?.message) === "Cancelled") return false;
+                markServerFailure(serverIndex, error);
+                console.warn(retryMode ? "[TWY RETRY] Chunk/server failure" : "[TWY] Chunk/server failure", {
+                    area: chunk.index + 1,
+                    server: serverIndex + 1,
+                    error: error
+                });
+            }
+        }
+        console.warn(retryMode ? "[TWY RETRY] Area still unavailable" : "[TWY] Area unavailable after failover", chunk.index + 1, lastError);
+        if (!retryMode) {
+            state.failedChunkKeys.add(chunk.key);
+            state.failedChunks++;
+            state.completedChunks++;
+            maybeRequestStagedRender();
+        }
+        updateUI();
+        return false;
+    }
+    async function runQueue(chunks, generation, options = {}) {
+        let nextIndex = 0;
+        const concurrency = Math.max(1, Number.isFinite(options.concurrency) ? Math.floor(options.concurrency) : CFG.maxConcurrentRequests);
+        async function worker() {
+            while (generation === state.loadGeneration) {
+                const index = nextIndex++;
+                if (index >= chunks.length) return;
+                await processChunk(chunks[index], generation, options);
+            }
+        }
+        const count = Math.min(concurrency, chunks.length);
+        await Promise.all(Array.from({
+            length: count
+        }, () => worker()));
+    }
+    function failedChunksForCurrentLoad() {
+        if (!state.failedChunkKeys.size) return [];
+        return state.chunks.filter(chunk => state.failedChunkKeys.has(chunk.key));
+    }
+    async function recoverFailedChunks(generation) {
+        if (!state.failedChunkKeys.size) return;
+        for (let pass = 1; pass <= CFG.autoChunkRetryPasses; pass++) {
+            if (generation !== state.loadGeneration) return;
+            const failed = failedChunksForCurrentLoad();
+            if (!failed.length) return;
+            const delay = CFG.autoChunkRetryDelaysMs[Math.min(pass - 1, CFG.autoChunkRetryDelaysMs.length - 1)] || 2500;
+            setStatus(`Recovering ${failed.length} missing area${failed.length === 1 ? "" : "s"} · pass ${pass}/${CFG.autoChunkRetryPasses}`, "loading");
+            updateUI();
+            await sleep(delay);
+            if (generation !== state.loadGeneration) return;
+            console.log(`[TWY RETRY] Starting recovery pass ${pass}`, failed.map(chunk => chunk.index + 1));
+            await runQueue(failed, generation, {
+                retryMode: true,
+                concurrency: CFG.autoChunkRetryConcurrency
+            });
+            if (generation !== state.loadGeneration) return;
+            if (state.failedChunkKeys.size < failed.length && (state.taxiways.size || state.taxilanes.size)) {
+                requestRender(1, 80);
+            }
+        }
+    }
+    function parseWidthMeters(raw) {
+        if (raw === undefined || raw === null) return null;
+        const match = String(raw).replace(",", ".").match(/\d+(?:\.\d+)?/);
+        if (!match) return null;
+        const value = Number(match[0]);
+        return Number.isFinite(value) && value > 0 ? value : null;
+    }
+    function addPointToBounds(point, bounds) {
+        if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lon)) return;
+        bounds.south = Math.min(bounds.south, point.lat);
+        bounds.north = Math.max(bounds.north, point.lat);
+        bounds.west = Math.min(bounds.west, point.lon);
+        bounds.east = Math.max(bounds.east, point.lon);
+    }
+    function computeTightBounds() {
+        const bounds = {
+            south: Infinity,
+            west: Infinity,
+            north: -Infinity,
+            east: -Infinity
+        };
+        for (const map of [ state.taxiways, state.taxilanes, state.holdings, state.parking ]) {
+            for (const feature of map.values()) {
+                if (feature.point) addPointToBounds(feature.point, bounds);
+                for (const point of feature.points || []) addPointToBounds(point, bounds);
+            }
+        }
+        if (!Number.isFinite(bounds.south)) return state.queryBounds;
+        const middleLat = (bounds.south + bounds.north) / 2;
+        const cosLat = Math.max(.2, Math.cos(middleLat * Math.PI / 180));
+        const padLat = CFG.imageryPaddingM / 111320;
+        const padLon = CFG.imageryPaddingM / (111320 * cosLat);
+        return {
+            south: bounds.south - padLat,
+            west: bounds.west - padLon,
+            north: bounds.north + padLat,
+            east: bounds.east + padLon
+        };
+    }
+    function nearestPointOnSegment(p, a, b) {
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy;
+        if (len2 <= 1e-8) {
+            return {
+                x: a.x,
+                y: a.y,
+                distance: Math.hypot(p.x - a.x, p.y - a.y)
+            };
+        }
+        const t = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0, 1);
+        const x = a.x + dx * t;
+        const y = a.y + dy * t;
+        return {
+            x: x,
+            y: y,
+            distance: Math.hypot(p.x - x, p.y - y)
+        };
+    }
+    function nearestPathSegment(pointPx, features, toPixel) {
+        let best = null;
+        for (const feature of features) {
+            const points = feature.points || [];
+            for (let i = 1; i < points.length; i++) {
+                const a = toPixel(points[i - 1]);
+                const b = toPixel(points[i]);
+                const nearest = nearestPointOnSegment(pointPx, a, b);
+                if (!best || nearest.distance < best.distance) {
+                    best = {
+                        ...nearest,
+                        feature: feature,
+                        angle: Math.atan2(b.y - a.y, b.x - a.x)
+                    };
+                }
+            }
+        }
+        return best;
+    }
+    function midpointOfPath(points, toPixel) {
+        const pixelPoints = points.map(toPixel);
+        if (pixelPoints.length < 2) return null;
+        let total = 0;
+        const lengths = [];
+        for (let i = 1; i < pixelPoints.length; i++) {
+            const length = Math.hypot(pixelPoints[i].x - pixelPoints[i - 1].x, pixelPoints[i].y - pixelPoints[i - 1].y);
+            lengths.push(length);
+            total += length;
+        }
+        if (total <= 1e-6) return null;
+        const target = total / 2;
+        let travelled = 0;
+        for (let i = 1; i < pixelPoints.length; i++) {
+            const segment = lengths[i - 1];
+            if (travelled + segment >= target) {
+                const a = pixelPoints[i - 1];
+                const b = pixelPoints[i];
+                const t = (target - travelled) / segment;
+                return {
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t,
+                    angle: Math.atan2(b.y - a.y, b.x - a.x)
+                };
+            }
+            travelled += segment;
+        }
+        return null;
+    }
+    function featuresForChunk(chunkKey, type) {
+        const data = state.chunkData.get(chunkKey);
+        if (!data) return [];
+        if (type === "movement") return [ ...data.taxiways, ...data.taxilanes ];
+        if (type === "runways") return data.runways;
+        return [];
+    }
+    function localMeters(origin, point) {
+        const latScale = 111320;
+        const lonScale = 111320 * Math.max(.15, Math.cos(origin.lat * Math.PI / 180));
+        return {
+            x: (point.lon - origin.lon) * lonScale,
+            y: (point.lat - origin.lat) * latScale
+        };
+    }
+    function geoDistanceMeters(a, b) {
+        const p = localMeters(a, b);
+        return Math.hypot(p.x, p.y);
+    }
+    function bearingDegrees(a, b) {
+        const lat1 = a.lat * Math.PI / 180;
+        const lat2 = b.lat * Math.PI / 180;
+        const dLon = (b.lon - a.lon) * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+        let deg = Math.atan2(y, x) * 180 / Math.PI;
+        if (deg < 0) deg += 360;
+        return deg;
+    }
+    function pointSegmentDistanceMeters(origin, aGeo, bGeo) {
+        const a = localMeters(origin, aGeo);
+        const b = localMeters(origin, bGeo);
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len2 = dx * dx + dy * dy;
+        if (len2 <= 1e-9) return Math.hypot(a.x, a.y);
+        const t = clamp(-(a.x * dx + a.y * dy) / len2, 0, 1);
+        const x = a.x + dx * t;
+        const y = a.y + dy * t;
+        return Math.hypot(x, y);
+    }
+    function featureDistanceMeters(origin, feature) {
+        if (feature.point) {
+            return geoDistanceMeters(origin, feature.point);
+        }
+        const points = feature.points || [];
+        if (points.length === 0) return Infinity;
+        if (points.length === 1) return geoDistanceMeters(origin, points[0]);
+        let best = Infinity;
+        for (let i = 1; i < points.length; i++) {
+            const d = pointSegmentDistanceMeters(origin, points[i - 1], points[i]);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+    function featureRepresentativePoint(feature) {
+        if (feature.point) return feature.point;
+        const points = feature.points || [];
+        if (!points.length) return null;
+        return points[Math.floor((points.length - 1) / 2)];
+    }
+    function parkingTargetPoint(feature) {
+        if (feature.point) return feature.point;
+        const points = feature.points || [];
+        if (!points.length) return null;
+        return points[points.length - 1];
+    }
+    function nearbyChunkDatasets(position, radiusM = CFG.detectorSearchRadiusM) {
+        if (!state.chunks.length || !state.chunkData.size) return [];
+        const latPad = radiusM / 111320;
+        const lonPad = radiusM / (111320 * Math.max(.15, Math.cos(position.lat * Math.PI / 180)));
+        const datasets = [];
+        for (const chunk of state.chunks) {
+            if (position.lat >= chunk.south - latPad && position.lat <= chunk.north + latPad && position.lon >= chunk.west - lonPad && position.lon <= chunk.east + lonPad) {
+                const data = state.chunkData.get(chunk.key);
+                if (data) datasets.push(data);
+            }
+        }
+        return datasets;
+    }
+    function collectNearbyFeatures(datasets, field) {
+        const unique = new Map;
+        for (const data of datasets) {
+            for (const feature of data?.[field] || []) {
+                unique.set(featureKey(feature), feature);
+            }
+        }
+        return [ ...unique.values() ];
+    }
+    function nearestNamedTaxiway(position, taxiways) {
+        let best = null;
+        for (const feature of taxiways) {
+            const ref = normalizeRef(feature.ref);
+            if (!ref) continue;
+            const distance = featureDistanceMeters(position, feature);
+            if (!best || distance < best.distance) {
+                best = {
+                    feature: feature,
+                    ref: ref,
+                    distance: distance
+                };
+            }
+        }
+        return best;
+    }
+    function nearestParkingStand(position, parking) {
+        let best = null;
+        for (const feature of parking) {
+            const ref = normalizeRef(feature.ref);
+            if (!ref) continue;
+            const target = parkingTargetPoint(feature);
+            if (!target) continue;
+            const distance = geoDistanceMeters(position, target);
+            if (!best || distance < best.distance) {
+                best = {
+                    feature: feature,
+                    ref: ref,
+                    target: target,
+                    distance: distance
+                };
+            }
+        }
+        return best;
+    }
+    function runwayCorridorHalfWidth(feature) {
+        const width = parseWidthMeters(feature.tags?.width) || 45;
+        return clamp(width / 2 + CFG.runwayExtraMarginM, CFG.runwayMinCorridorHalfWidthM, CFG.runwayMaxCorridorHalfWidthM);
+    }
+    function nearestRunwayHit(position, runways) {
+        let best = null;
+        for (const feature of runways) {
+            const distance = featureDistanceMeters(position, feature);
+            const halfWidth = runwayCorridorHalfWidth(feature);
+            if (distance > halfWidth) continue;
+            if (!best || distance < best.distance) {
+                best = {
+                    feature: feature,
+                    key: featureKey(feature),
+                    distance: distance,
+                    halfWidth: halfWidth
+                };
+            }
+        }
+        return best;
+    }
+    function runwayHeadingFromDesignator(part) {
+        const match = String(part || "").trim().toUpperCase().match(/^(\d{1,2})([LCR]?)$/);
+        if (!match) return null;
+        const number = Number(match[1]);
+        if (!Number.isFinite(number) || number < 1 || number > 36) return null;
+        return number === 36 ? 360 : number * 10;
+    }
+    function angleDifferenceDegrees(a, b) {
+        const d = Math.abs((a - b + 540) % 360 - 180);
+        return d;
+    }
+    function runwayDisplayRef(feature, movementBearing) {
+        const raw = normalizeRef(feature?.ref);
+        if (!raw) return "RUNWAY";
+        const parts = raw.split(/[\/;]/).map(part => part.trim().toUpperCase()).filter(Boolean);
+        if (parts.length <= 1 || !Number.isFinite(movementBearing)) {
+            return raw.toUpperCase();
+        }
+        let best = null;
+        for (const part of parts) {
+            const heading = runwayHeadingFromDesignator(part);
+            if (heading === null) continue;
+            const diff = angleDifferenceDegrees(movementBearing, heading);
+            if (!best || diff < best.diff) {
+                best = {
+                    part: part,
+                    diff: diff
+                };
+            }
+        }
+        return best && best.diff <= 55 ? best.part : raw.toUpperCase();
+    }
+    function nearestRunwayToPoint(position, runways) {
+        let best = null;
+        for (const feature of runways) {
+            const distance = featureDistanceMeters(position, feature);
+            if (!best || distance < best.distance) {
+                best = {
+                    feature: feature,
+                    distance: distance
+                };
+            }
+        }
+        return best;
+    }
+    function nearestHoldAhead(position, holdings, runways) {
+        let best = null;
+        for (const feature of holdings) {
+            const type = String(feature.holdType || "").trim().toLowerCase();
+            if (type === "ils" || type === "intermediate" || type === "movement") {
+                continue;
+            }
+            const distance = featureDistanceMeters(position, feature);
+            if (distance > CFG.holdAheadDistanceM) continue;
+            const anchor = featureRepresentativePoint(feature);
+            if (!anchor) continue;
+            const runway = nearestRunwayToPoint(anchor, runways);
+            if (!runway || runway.distance > 220) continue;
+            if (!best || distance < best.distance) {
+                best = {
+                    feature: feature,
+                    key: featureKey(feature),
+                    distance: distance,
+                    runway: runway.feature
+                };
+            }
+        }
+        return best;
+    }
+    function updateDetectorMotion(position, now) {
+        const d = state.detector;
+        if (!d.lastPosition || !d.lastSampleTime) {
+            d.lastPosition = {
+                ...position
+            };
+            d.lastSampleTime = now;
+            d.speedKt = 0;
+            return false;
+        }
+        const dt = (now - d.lastSampleTime) / 1e3;
+        if (dt <= 0 || dt > 3) {
+            d.lastPosition = {
+                ...position
+            };
+            d.lastSampleTime = now;
+            return false;
+        }
+        const distance = geoDistanceMeters(d.lastPosition, position);
+        const rawSpeedKt = distance / dt * 1.943844;
+        if (rawSpeedKt > 250 || distance > 800) {
+            resetDetectorState();
+            state.detector.lastPosition = {
+                ...position
+            };
+            state.detector.lastSampleTime = now;
+            return true;
+        }
+        if (distance > .8) {
+            d.bearingDeg = bearingDegrees(d.lastPosition, position);
+        }
+        d.speedKt = d.lastSampleTime ? d.speedKt * .55 + rawSpeedKt * .45 : rawSpeedKt;
+        d.lastPosition = {
+            ...position
+        };
+        d.lastSampleTime = now;
+        return false;
+    }
+    function commitRunwayState(runwayHit, taxiHit, now) {
+        const d = state.detector;
+        const nextKey = runwayHit?.key || null;
+        if (nextKey === d.currentRunwayKey) {
+            if (nextKey && runwayHit?.feature) {
+                const refined = runwayDisplayRef(runwayHit.feature, d.bearingDeg);
+                if (refined && !refined.includes("/")) {
+                    d.currentRunwayLabel = refined;
+                }
+            }
+            d.runwayCandidateKey = null;
+            d.runwayCandidateFeature = null;
+            d.runwayCandidateSince = 0;
+            return;
+        }
+        if (nextKey !== d.runwayCandidateKey) {
+            d.runwayCandidateKey = nextKey;
+            d.runwayCandidateFeature = runwayHit?.feature || null;
+            d.runwayCandidateSince = now;
+            return;
+        }
+        if (now - d.runwayCandidateSince < CFG.runwayStableMs) return;
+        const oldKey = d.currentRunwayKey;
+        const oldFeature = d.currentRunwayFeature;
+        const oldLabel = d.currentRunwayLabel;
+        const newFeature = d.runwayCandidateFeature;
+        d.currentRunwayKey = nextKey;
+        d.currentRunwayFeature = newFeature;
+        d.currentRunwayLabel = newFeature ? runwayDisplayRef(newFeature, d.bearingDeg) : null;
+        d.runwayCandidateKey = null;
+        d.runwayCandidateFeature = null;
+        d.runwayCandidateSince = 0;
+        if (!d.initialized) return;
+        if (!oldKey && nextKey && newFeature) {
+            const runwayRef = d.currentRunwayLabel || runwayDisplayRef(newFeature, d.bearingDeg);
+            queueNotification("runway", "ENTERING RUNWAY", runwayRef, Number.isFinite(d.speedKt) ? `${Math.round(d.speedKt)} kt` : "", `runway-enter:${nextKey}`, 2900);
+            d.suppressTaxiUntil = now + 2800;
+            d.lastHoldAlertKey = null;
+            return;
+        }
+        if (oldKey && !nextKey && oldFeature) {
+            const runwayRef = oldLabel || runwayDisplayRef(oldFeature, d.bearingDeg);
+            const taxiRef = taxiHit?.ref || null;
+            queueNotification("success", "VACATED RUNWAY", runwayRef, taxiRef ? `TAXIWAY ${taxiRef}` : "", `runway-vacated:${oldKey}`, 2800);
+            if (taxiRef) {
+                d.currentTaxiRef = taxiRef;
+                d.taxiCandidateRef = null;
+                d.taxiCandidateSince = 0;
+            }
+            d.suppressTaxiUntil = now + 2800;
+        }
+    }
+    function commitTaxiwayState(taxiHit, now) {
+        const d = state.detector;
+        if (d.currentRunwayKey) return;
+        const nextRef = taxiHit && taxiHit.distance <= CFG.taxiwayAcquireDistanceM ? taxiHit.ref : null;
+        if (nextRef === d.currentTaxiRef) {
+            d.taxiCandidateRef = null;
+            d.taxiCandidateSince = 0;
+            return;
+        }
+        if (nextRef !== d.taxiCandidateRef) {
+            d.taxiCandidateRef = nextRef;
+            d.taxiCandidateSince = now;
+            return;
+        }
+        if (now - d.taxiCandidateSince < CFG.taxiwayStableMs) return;
+        d.currentTaxiRef = nextRef;
+        d.taxiCandidateRef = null;
+        d.taxiCandidateSince = 0;
+        if (d.initialized && nextRef && now >= d.suppressTaxiUntil) {
+            queueNotification("taxi", "ENTERING TAXIWAY", nextRef, "", `taxiway:${nextRef}`, 2200);
+        }
+    }
+    function detectParking(position, parking, now) {
+        const d = state.detector;
+        const stand = nearestParkingStand(position, parking);
+        const eligible = !d.currentRunwayKey && stand && stand.distance <= CFG.standParkDistanceM && d.speedKt <= CFG.standParkMaxSpeedKt;
+        if (!eligible) {
+            d.standCandidateRef = null;
+            d.standCandidateSince = 0;
+            if (d.parkedStandRef && (!stand || stand.distance > CFG.standReleaseDistanceM || d.speedKt > CFG.standReleaseSpeedKt)) {
+                d.parkedStandRef = null;
+            }
+            return;
+        }
+        if (stand.ref === d.parkedStandRef) return;
+        if (stand.ref !== d.standCandidateRef) {
+            d.standCandidateRef = stand.ref;
+            d.standCandidateSince = now;
+            return;
+        }
+        if (now - d.standCandidateSince < CFG.standStableMs) return;
+        d.parkedStandRef = stand.ref;
+        d.standCandidateRef = null;
+        d.standCandidateSince = 0;
+        if (!d.initialized) return;
+        queueNotification("success", "PARKED AT STAND", stand.ref, `${Math.round(stand.distance)} m from stop point`, `parked:${stand.ref}`, 3200);
+    }
+    function clearGroundEventStateForFlight() {
+        const d = state.detector;
+        d.initialized = false;
+        d.taxiSpeedWarningActive = false;
+        d.currentTaxiRef = null;
+        d.taxiCandidateRef = null;
+        d.taxiCandidateSince = 0;
+        d.currentRunwayKey = null;
+        d.currentRunwayFeature = null;
+        d.currentRunwayLabel = null;
+        d.runwayCandidateKey = null;
+        d.runwayCandidateFeature = null;
+        d.runwayCandidateSince = 0;
+        d.lastHoldAlertKey = null;
+        d.parkedStandRef = null;
+        d.standCandidateRef = null;
+        d.standCandidateSince = 0;
+        d.suppressTaxiUntil = 0;
+    }
+    function handleHighSpeedGroundSuppression() {
+        const d = state.detector;
+        if (!d.highSpeedSuppressed && d.speedKt >= CFG.flightSuppressSpeedKt) {
+            d.highSpeedSuppressed = true;
+            d.taxiSpeedFlightLatch = true;
+            clearGroundEventStateForFlight();
+            state.notificationQueue = [];
+            return true;
+        }
+        if (d.highSpeedSuppressed && d.speedKt <= CFG.flightResumeSpeedKt) {
+            d.highSpeedSuppressed = false;
+            clearGroundEventStateForFlight();
+            return false;
+        }
+        return d.highSpeedSuppressed;
+    }
+    function detectTaxiSpeedWarning(runwayHit, taxiHit) {
+        const d = state.detector;
+        if (d.taxiSpeedFlightLatch) {
+            if (d.speedKt <= CFG.taxiSpeedResetKt) {
+                d.taxiSpeedFlightLatch = false;
+                d.taxiSpeedWarningActive = false;
+            }
+            return;
+        }
+        const onRunway = !!d.currentRunwayKey || !!runwayHit;
+        if (onRunway) {
+            if (d.speedKt <= CFG.taxiSpeedResetKt) {
+                d.taxiSpeedWarningActive = false;
+            }
+            return;
+        }
+        const onTaxiway = !!taxiHit && !!taxiHit.ref && taxiHit.distance <= CFG.taxiwayAcquireDistanceM;
+        if (!onTaxiway) {
+            if (d.speedKt <= CFG.taxiSpeedResetKt) {
+                d.taxiSpeedWarningActive = false;
+            }
+            return;
+        }
+        if (d.speedKt <= CFG.taxiSpeedResetKt) {
+            d.taxiSpeedWarningActive = false;
+            return;
+        }
+        if (!d.taxiSpeedWarningActive && d.speedKt >= CFG.taxiSpeedWarningKt) {
+            d.taxiSpeedWarningActive = true;
+            queueNotification("warning", "HIGH TAXI SPEED", `${Math.round(d.speedKt)} KT`, "Reduce taxi speed", "taxi-speed-warning", 2500);
+        }
+    }
+    function detectorTick() {
+        if (!state.notificationsEnabled || !state.taxiways.size && !state.runways.size && !state.parking.size && !state.holdings.size) {
+            return;
+        }
+        const position = aircraftLL();
+        if (!Number.isFinite(position.lat) || !Number.isFinite(position.lon)) return;
+        const now = Date.now();
+        const teleported = updateDetectorMotion(position, now);
+        if (teleported) return;
+        if (handleHighSpeedGroundSuppression()) return;
+        const datasets = nearbyChunkDatasets(position);
+        if (!datasets.length) return;
+        const taxiways = collectNearbyFeatures(datasets, "taxiways");
+        const holdings = collectNearbyFeatures(datasets, "holdings");
+        const parking = collectNearbyFeatures(datasets, "parking");
+        const runways = collectNearbyFeatures(datasets, "runways");
+        const taxiHit = nearestNamedTaxiway(position, taxiways);
+        const runwayHit = nearestRunwayHit(position, runways);
+        if (!state.detector.initialized) {
+            state.detector.currentTaxiRef = taxiHit && taxiHit.distance <= CFG.taxiwayAcquireDistanceM ? taxiHit.ref : null;
+            state.detector.currentRunwayKey = runwayHit?.key || null;
+            state.detector.currentRunwayFeature = runwayHit?.feature || null;
+            state.detector.currentRunwayLabel = runwayHit?.feature ? runwayDisplayRef(runwayHit.feature, state.detector.bearingDeg) : null;
+            state.detector.taxiSpeedWarningActive = !runwayHit && state.detector.speedKt >= CFG.taxiSpeedWarningKt;
+            state.detector.initialized = true;
+            const initialStand = nearestParkingStand(position, parking);
+            if (initialStand && initialStand.distance <= CFG.standParkDistanceM && state.detector.speedKt <= CFG.standParkMaxSpeedKt) {
+                state.detector.parkedStandRef = initialStand.ref;
+            }
+            return;
+        }
+        commitRunwayState(runwayHit, taxiHit, now);
+        commitTaxiwayState(taxiHit, now);
+        detectTaxiSpeedWarning(runwayHit, taxiHit);
+        detectParking(position, parking, now);
+    }
+    function startDetector() {
+        if (state.detectorTimer) return;
+        state.detectorTimer = setInterval(detectorTick, CFG.detectorIntervalMs);
+    }
+    function drawPolyline(ctx, points, toPixel, widthPx, opacity = 1) {
+        if (!Array.isArray(points) || points.length < 2) return;
+        const first = toPixel(points[0]);
+        ctx.save();
+        ctx.strokeStyle = CFG.yellow;
+        ctx.globalAlpha = opacity;
+        ctx.lineWidth = widthPx;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.miterLimit = 2;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < points.length; i++) {
+            const p = toPixel(points[i]);
+            ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+    function drawBarLine(ctx, center, angle, lengthPx, offsetPx, widthPx, dashed, dashPx, gapPx) {
+        const normalX = -Math.sin(angle);
+        const normalY = Math.cos(angle);
+        const cx = center.x + normalX * offsetPx;
+        const cy = center.y + normalY * offsetPx;
+        const half = lengthPx / 2;
+        const dx = Math.cos(angle) * half;
+        const dy = Math.sin(angle) * half;
+        ctx.save();
+        ctx.strokeStyle = CFG.yellow;
+        ctx.lineWidth = widthPx;
+        ctx.lineCap = "butt";
+        ctx.setLineDash(dashed ? [ Math.max(1, dashPx), Math.max(1, gapPx) ] : []);
+        ctx.beginPath();
+        ctx.moveTo(cx - dx, cy - dy);
+        ctx.lineTo(cx + dx, cy + dy);
+        ctx.stroke();
+        ctx.restore();
+    }
+    function holdingGeometry(feature, toPixel) {
+        if (feature.osmType === "way" && feature.points?.length >= 2) {
+            const middle = midpointOfPath(feature.points, toPixel);
+            if (!middle) return null;
+            const localMovement = featuresForChunk(feature.chunkKey, "movement");
+            const nearestMovement = localMovement.length ? nearestPathSegment({
+                x: middle.x,
+                y: middle.y
+            }, localMovement, toPixel) : null;
+            return {
+                center: {
+                    x: middle.x,
+                    y: middle.y
+                },
+                barAngle: middle.angle,
+                nearestMovement: nearestMovement
+            };
+        }
+        if (feature.point) {
+            const center = toPixel(feature.point);
+            let movement = featuresForChunk(feature.chunkKey, "movement");
+            let nearestMovement = movement.length ? nearestPathSegment(center, movement, toPixel) : null;
+            if (!nearestMovement) {
+                movement = [ ...state.taxiways.values(), ...state.taxilanes.values() ];
+                nearestMovement = nearestPathSegment(center, movement, toPixel);
+            }
+            if (!nearestMovement) return null;
+            return {
+                center: center,
+                barAngle: nearestMovement.angle + Math.PI / 2,
+                nearestMovement: nearestMovement
+            };
+        }
+        return null;
+    }
+    function runwaySideSign(feature, center, barAngle, toPixel) {
+        let runways = featuresForChunk(feature.chunkKey, "runways");
+        let runway = runways.length ? nearestPathSegment(center, runways, toPixel) : null;
+        if (!runway && state.runways.size) {
+            runway = nearestPathSegment(center, [ ...state.runways.values() ], toPixel);
+        }
+        if (!runway) return 1;
+        const vx = runway.x - center.x;
+        const vy = runway.y - center.y;
+        const normalX = -Math.sin(barAngle);
+        const normalY = Math.cos(barAngle);
+        return vx * normalX + vy * normalY >= 0 ? 1 : -1;
+    }
+    function drawHoldingPositions(ctx, toPixel, metersPerPixel) {
+        for (const feature of state.holdings.values()) {
+            const geometry = holdingGeometry(feature, toPixel);
+            if (!geometry) continue;
+            const widthM = parseWidthMeters(geometry.nearestMovement?.feature?.tags?.width) || CFG.holdDefaultTaxiwayWidthM;
+            const lengthPx = clamp(widthM * 1.1, CFG.holdMinLengthM, CFG.holdMaxLengthM) / metersPerPixel;
+            const lineWidthPx = CFG.holdLineWidthM / metersPerPixel;
+            const pairPx = CFG.holdPairSpacingM / metersPerPixel;
+            const groupPx = CFG.holdGroupSpacingM / metersPerPixel;
+            const dashPx = CFG.holdDashM / metersPerPixel;
+            const gapPx = CFG.holdGapM / metersPerPixel;
+            const type = String(feature.holdType || "").trim().toLowerCase();
+            const runwaySign = runwaySideSign(feature, geometry.center, geometry.barAngle, toPixel);
+            if (type === "ils") {
+                const sepPx = 3 / metersPerPixel;
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, -sepPx / 2, lineWidthPx, false, 0, 0);
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, sepPx / 2, lineWidthPx, false, 0, 0);
+            } else if (type === "intermediate") {
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, 0, lineWidthPx, true, dashPx, gapPx);
+            } else {
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, -runwaySign * (groupPx + pairPx / 2), lineWidthPx, false, 0, 0);
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, -runwaySign * (groupPx - pairPx / 2), lineWidthPx, false, 0, 0);
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, runwaySign * (groupPx - pairPx / 2), lineWidthPx, true, dashPx, gapPx);
+                drawBarLine(ctx, geometry.center, geometry.barAngle, lengthPx, runwaySign * (groupPx + pairPx / 2), lineWidthPx, true, dashPx, gapPx);
+            }
+        }
+    }
+    function normalizeRef(raw) {
+        if (typeof raw !== "string") return null;
+        return raw.split(";").map(part => part.trim()).filter(Boolean).join("/") || null;
+    }
+    function drawStandText(ctx, text, x, y, metersPerPixel) {
+        if (!state.standNumbersEnabled || !text) return;
+        const fontPx = clamp(CFG.standFontM / metersPerPixel, CFG.standMinPx, CFG.standMaxPx);
+        ctx.save();
+        ctx.font = `700 ${fontPx}px Arial, Helvetica, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = Math.max(2, fontPx * .18);
+        ctx.strokeStyle = "rgba(0,0,0,.72)";
+        ctx.fillStyle = CFG.yellow;
+        ctx.strokeText(text, x, y);
+        ctx.fillText(text, x, y);
+        ctx.restore();
+    }
+    function drawParking(ctx, toPixel, metersPerPixel) {
+        const drawPhysical = state.standLeadInsEnabled;
+        const widthPx = CFG.parkingLineWidthM / metersPerPixel;
+        for (const feature of state.parking.values()) {
+            if (feature.osmType === "way" && feature.points?.length >= 2) {
+                const end = toPixel(feature.points.at(-1));
+                if (drawPhysical) {
+                    drawPolyline(ctx, feature.points, toPixel, widthPx, .82);
+                    const before = toPixel(feature.points.at(-2));
+                    const angle = Math.atan2(end.y - before.y, end.x - before.x) + Math.PI / 2;
+                    drawBarLine(ctx, end, angle, CFG.parkingStopBarM / metersPerPixel, 0, widthPx, false, 0, 0);
+                }
+                drawStandText(ctx, normalizeRef(feature.ref), end.x, end.y - 6 / metersPerPixel, metersPerPixel);
+            } else if (feature.point) {
+                const p = toPixel(feature.point);
+                if (drawPhysical) {
+                    ctx.save();
+                    ctx.fillStyle = CFG.yellow;
+                    ctx.globalAlpha = .82;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, Math.max(1, CFG.parkingNodeRadiusM / metersPerPixel), 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+                drawStandText(ctx, normalizeRef(feature.ref), p.x, p.y - 6 / metersPerPixel, metersPerPixel);
+            }
+        }
+    }
+    function interpolateAlongPixelPath(pixelPoints, targetDistance) {
+        let travelled = 0;
+        for (let i = 1; i < pixelPoints.length; i++) {
+            const a = pixelPoints[i - 1];
+            const b = pixelPoints[i];
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const length = Math.hypot(dx, dy);
+            if (length <= 1e-6) continue;
+            if (travelled + length >= targetDistance) {
+                const t = (targetDistance - travelled) / length;
+                let angle = Math.atan2(dy, dx);
+                if (angle > Math.PI / 2) angle -= Math.PI;
+                if (angle < -Math.PI / 2) angle += Math.PI;
+                return {
+                    x: a.x + dx * t,
+                    y: a.y + dy * t,
+                    angle: angle
+                };
+            }
+            travelled += length;
+        }
+        return null;
+    }
+    function boxesOverlap(a, b, margin = 3) {
+        return !(a.right + margin < b.left || a.left - margin > b.right || a.bottom + margin < b.top || a.top - margin > b.bottom);
+    }
+    function roundedRect(ctx, x, y, width, height, radius) {
+        if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(x, y, width, height, radius);
+            return;
+        }
+        const r = Math.min(radius, width / 2, height / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + width - r, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+        ctx.lineTo(x + width, y + height - r);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+        ctx.lineTo(x + r, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+    function drawTaxiwayLabels(ctx, toPixel, metersPerPixel) {
+        if (!state.taxiwayLabelsEnabled) return;
+        const candidates = [];
+        const repeatPx = CFG.taxiLabelRepeatM / metersPerPixel;
+        for (const way of state.taxiways.values()) {
+            const ref = normalizeRef(way.ref);
+            if (!ref || !way.points || way.points.length < 2) continue;
+            const pixels = way.points.map(toPixel);
+            let totalLength = 0;
+            for (let i = 1; i < pixels.length; i++) {
+                totalLength += Math.hypot(pixels[i].x - pixels[i - 1].x, pixels[i].y - pixels[i - 1].y);
+            }
+            if (totalLength <= 1) continue;
+            const count = totalLength > repeatPx * 1.35 ? Math.max(1, Math.floor(totalLength / repeatPx)) : 1;
+            for (let i = 1; i <= count; i++) {
+                const target = totalLength * i / (count + 1);
+                const point = interpolateAlongPixelPath(pixels, target);
+                if (point) candidates.push({
+                    ref: ref,
+                    ...point
+                });
+            }
+        }
+        const fontPx = clamp(CFG.taxiLabelFontM / metersPerPixel, CFG.taxiLabelMinPx, CFG.taxiLabelMaxPx);
+        const paddingPx = Math.max(2, CFG.taxiLabelPaddingM / metersPerPixel);
+        const offsetPx = CFG.taxiLabelOffsetM / metersPerPixel;
+        const sameRefSpacingPx = CFG.taxiLabelSameRefMinM / metersPerPixel;
+        const placedBoxes = [];
+        const placedByRef = new Map;
+        ctx.save();
+        ctx.font = `700 ${fontPx}px Arial, Helvetica, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        for (const candidate of candidates) {
+            const sameRef = placedByRef.get(candidate.ref) || [];
+            if (sameRef.some(existing => Math.hypot(candidate.x - existing.x, candidate.y - existing.y) < sameRefSpacingPx)) {
+                continue;
+            }
+            const textWidth = ctx.measureText(candidate.ref).width;
+            const boxWidth = textWidth + paddingPx * 2.3;
+            const boxHeight = fontPx + paddingPx * 1.7;
+            const normalX = -Math.sin(candidate.angle);
+            const normalY = Math.cos(candidate.angle);
+            let chosen = null;
+            for (const side of [ 1, -1, 0 ]) {
+                const x = candidate.x + normalX * offsetPx * side;
+                const y = candidate.y + normalY * offsetPx * side;
+                const box = {
+                    left: x - boxWidth / 2,
+                    right: x + boxWidth / 2,
+                    top: y - boxHeight / 2,
+                    bottom: y + boxHeight / 2
+                };
+                if (!placedBoxes.some(existing => boxesOverlap(box, existing))) {
+                    chosen = {
+                        x: x,
+                        y: y,
+                        box: box
+                    };
+                    break;
+                }
+            }
+            if (!chosen) continue;
+            ctx.save();
+            ctx.translate(chosen.x, chosen.y);
+            ctx.rotate(candidate.angle);
+            roundedRect(ctx, -boxWidth / 2, -boxHeight / 2, boxWidth, boxHeight, Math.max(2, fontPx * .18));
+            ctx.fillStyle = "rgba(18,20,22,.88)";
+            ctx.fill();
+            ctx.strokeStyle = "rgba(255,210,26,.92)";
+            ctx.lineWidth = Math.max(1, fontPx * .08);
+            ctx.stroke();
+            ctx.fillStyle = CFG.yellow;
+            ctx.fillText(candidate.ref, 0, .5);
+            ctx.restore();
+            placedBoxes.push(chosen.box);
+            sameRef.push({
+                x: candidate.x,
+                y: candidate.y
+            });
+            placedByRef.set(candidate.ref, sameRef);
+        }
+        ctx.restore();
+    }
+    function renderCanvas(quality) {
+        const bounds = computeTightBounds();
+        if (!bounds) throw new Error("No ground geometry to render");
+        const middleLat = (bounds.south + bounds.north) / 2;
+        const cosLat = Math.max(.15, Math.cos(middleLat * Math.PI / 180));
+        const heightM = (bounds.north - bounds.south) * 111320;
+        const widthM = (bounds.east - bounds.west) * 111320 * cosLat;
+        const longestGroundDimension = Math.max(widthM, heightM);
+        const desiredMetersPerPixel = CFG.taxiwayWidthM / CFG.targetStrokePixels;
+        let longestCanvasDimension;
+        if (quality === 1) {
+            longestCanvasDimension = Math.min(CFG.previewCanvasMax, Math.max(2048, Math.ceil(longestGroundDimension / desiredMetersPerPixel)));
+        } else {
+            longestCanvasDimension = Math.ceil(longestGroundDimension / desiredMetersPerPixel);
+            longestCanvasDimension = Math.max(CFG.finalCanvasBase, longestCanvasDimension);
+            longestCanvasDimension = Math.min(CFG.finalCanvasMax, longestCanvasDimension);
+        }
+        let width;
+        let height;
+        if (widthM >= heightM) {
+            width = longestCanvasDimension;
+            height = Math.max(512, Math.round(width * heightM / widthM));
+        } else {
+            height = longestCanvasDimension;
+            width = Math.max(512, Math.round(height * widthM / heightM));
+        }
+        const metersPerPixel = (widthM / width + heightM / height) / 2;
+        console.log("[TWY RENDER]", {
+            quality: quality === 1 ? "preview" : "final",
+            canvas: `${width}×${height}`,
+            taxiways: state.taxiways.size,
+            taxilanes: state.taxilanes.size,
+            holds: state.holdings.size,
+            stands: state.parking.size
+        });
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d", {
+            alpha: true
+        });
+        ctx.clearRect(0, 0, width, height);
+        const lonRange = bounds.east - bounds.west;
+        const latRange = bounds.north - bounds.south;
+        function toPixel(point) {
+            return {
+                x: (point.lon - bounds.west) / lonRange * width,
+                y: (bounds.north - point.lat) / latRange * height
+            };
+        }
+        const taxiwayWidthPx = CFG.taxiwayWidthM / metersPerPixel;
+        const taxilaneWidthPx = CFG.taxilaneWidthM / metersPerPixel;
+        for (const taxiway of state.taxiways.values()) {
+            drawPolyline(ctx, taxiway.points, toPixel, taxiwayWidthPx, 1);
+        }
+        for (const taxilane of state.taxilanes.values()) {
+            drawPolyline(ctx, taxilane.points, toPixel, taxilaneWidthPx, CFG.taxilaneOpacity);
+        }
+        drawHoldingPositions(ctx, toPixel, metersPerPixel);
+        drawParking(ctx, toPixel, metersPerPixel);
+        drawTaxiwayLabels(ctx, toPixel, metersPerPixel);
+        return {
+            canvas: canvas,
+            bounds: bounds
+        };
+    }
+    function canvasToBlob(canvas) {
+        return new Promise((resolve, reject) => {
+            canvas.toBlob(blob => {
+                if (!blob) {
+                    reject(new Error("PNG export failed"));
+                    return;
+                }
+                resolve(blob);
+            }, "image/png");
+        });
+    }
+    async function installCanvas(canvas, bounds, serial) {
+        const Cesium = window.Cesium;
+        const layers = getImageryLayers();
+        if (!layers) return;
+        const blob = await canvasToBlob(canvas);
+        if (serial !== state.renderSerial) return;
+        const blobUrl = URL.createObjectURL(blob);
+        const rectangle = Cesium.Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north);
+        let provider;
+        if (Cesium.SingleTileImageryProvider && typeof Cesium.SingleTileImageryProvider.fromUrl === "function") {
+            provider = await Cesium.SingleTileImageryProvider.fromUrl(blobUrl, {
+                rectangle: rectangle
+            });
+        } else {
+            provider = new Cesium.SingleTileImageryProvider({
+                url: blobUrl,
+                rectangle: rectangle
+            });
+        }
+        if (serial !== state.renderSerial) {
+            URL.revokeObjectURL(blobUrl);
+            return;
+        }
+        const newLayer = typeof layers.addImageryProvider === "function" ? layers.addImageryProvider(provider) : layers.add(new Cesium.ImageryLayer(provider));
+        newLayer.alpha = 1;
+        newLayer.show = true;
+        const oldLayer = state.layer;
+        const oldBlob = state.blobUrl;
+        state.layer = newLayer;
+        state.blobUrl = blobUrl;
+        if (oldLayer) {
+            try {
+                layers.remove(oldLayer, true);
+            } catch (_) {
+                try {
+                    layers.remove(oldLayer);
+                } catch (_) {}
+            }
+        }
+        if (oldBlob) {
+            setTimeout(() => {
+                try {
+                    URL.revokeObjectURL(oldBlob);
+                } catch (_) {}
+            }, 600);
+        }
+    }
+    function requestRender(quality, delayMs = 0) {
+        state.pendingRenderQuality = Math.max(state.pendingRenderQuality, quality);
+        if (state.renderBusy) return;
+        if (state.renderTimer) clearTimeout(state.renderTimer);
+        state.renderTimer = setTimeout(() => {
+            state.renderTimer = null;
+            runRenderLoop();
+        }, delayMs);
+    }
+    async function runRenderLoop() {
+        if (state.renderBusy) return;
+        if (!state.pendingRenderQuality) return;
+        if (!state.taxiways.size && !state.taxilanes.size && !state.parking.size && !state.holdings.size) return;
+        state.renderBusy = true;
+        try {
+            while (state.pendingRenderQuality) {
+                const quality = state.pendingRenderQuality;
+                state.pendingRenderQuality = 0;
+                const serial = ++state.renderSerial;
+                try {
+                    const rendered = renderCanvas(quality);
+                    await installCanvas(rendered.canvas, rendered.bounds, serial);
+                } catch (error) {
+                    console.error("[TWY RENDER]", error);
+                }
+            }
+        } finally {
+            state.renderBusy = false;
+        }
+    }
+    function removeCurrentOverlay() {
+        const layers = getImageryLayers();
+        if (layers && state.layer) {
+            try {
+                layers.remove(state.layer, true);
+            } catch (_) {
+                try {
+                    layers.remove(state.layer);
+                } catch (_) {}
+            }
+        }
+        state.layer = null;
+        if (state.blobUrl) {
+            try {
+                URL.revokeObjectURL(state.blobUrl);
+            } catch (_) {}
+            state.blobUrl = null;
+        }
+    }
+    function autoLoadPositionInsideCoverage(position) {
+        const bounds = state.queryBounds;
+        if (!bounds) return false;
+        return position.lat >= bounds.south && position.lat <= bounds.north && position.lon >= bounds.west && position.lon <= bounds.east;
+    }
+    function updateAutoLoadMotion(position, now) {
+        const a = state.autoLoad;
+        if (!a.lastPosition || !a.lastSampleTime) {
+            a.lastPosition = {
+                ...position
+            };
+            a.lastSampleTime = now;
+            a.speedKt = 0;
+            return;
+        }
+        const dt = (now - a.lastSampleTime) / 1e3;
+        if (dt <= 0 || dt > 5) {
+            a.lastPosition = {
+                ...position
+            };
+            a.lastSampleTime = now;
+            return;
+        }
+        const distance = geoDistanceMeters(a.lastPosition, position);
+        const rawSpeedKt = distance / dt * 1.943844;
+        if (distance > 2) {
+            a.bearingDeg = bearingDegrees(a.lastPosition, position);
+        }
+        if (rawSpeedKt > 500 || distance > 2500) {
+            a.speedKt = 500;
+            a.candidateSince = 0;
+        } else {
+            a.speedKt = a.speedKt * .45 + rawSpeedKt * .55;
+        }
+        a.lastPosition = {
+            ...position
+        };
+        a.lastSampleTime = now;
+    }
+    function autoLoadResetBlockActive(position) {
+        const blockedAt = state.autoLoad.resetBlockPosition;
+        if (!blockedAt) return false;
+        const distance = geoDistanceMeters(blockedAt, position);
+        if (distance >= CFG.autoLoadResetReleaseDistanceM) {
+            state.autoLoad.resetBlockPosition = null;
+            return false;
+        }
+        return true;
+    }
+    function clearAirportRuntimeKeepCache() {
+        abortActiveWork();
+        resetDetectorState();
+        clearNotificationQueue();
+        state.running = false;
+        removeCurrentOverlay();
+        removeStandLocatorEntities({
+            clearSelection: true
+        });
+        clearRuntimeData();
+        state.chunks = [];
+        state.queryBounds = null;
+        state.gridSignature = null;
+        state.totalChunks = 0;
+        state.completedChunks = 0;
+        state.successfulChunks = 0;
+        state.failedChunks = 0;
+        state.cachedChunks = 0;
+        state.failedChunkKeys = new Set;
+        state.earlyPreviewRequested = false;
+        state.midPreviewRequested = false;
+        state.autoLoad.candidateSince = 0;
+    }
+    function unloadAirportForFlight() {
+        disarmModifyArrival();
+        clearAirportRuntimeKeepCache();
+        state.arrivalMode = true;
+        state.arrival.departureOutsideSince = 0;
+        state.arrival.protectionUntil = 0;
+        state.arrival.selectedAirport = null;
+        state.arrival.manualModifyAvailable = false;
+        state.arrival.groundConfirmSince = 0;
+        resetArrivalLockState();
+        state.arrival.selectedBestDistanceM = null;
+        state.arrival.movingAwaySince = 0;
+        closeArrivalChooser();
+        setStatus("Airborne · ARR available", "idle");
+        updateStandLocatorStatus();
+        updateUI();
+        console.log("[TWY] Departure detected: airport overlay/data unloaded; cache retained.");
+    }
+    function arrivalProtectionActive(position, now) {
+        if (!state.arrival.protectionUntil) return false;
+        const selected = state.arrival.selectedAirport;
+        if (autoLoadPositionInsideCoverage(position)) {
+            state.arrival.movingAwaySince = 0;
+            if (state.arrival.manualModifyAvailable) {
+                return true;
+            }
+            state.arrival.protectionUntil = 0;
+            state.arrival.selectedBestDistanceM = null;
+            return false;
+        }
+        if (now >= state.arrival.protectionUntil) {
+            state.arrival.protectionUntil = 0;
+            state.arrival.selectedBestDistanceM = null;
+            state.arrival.movingAwaySince = 0;
+            return false;
+        }
+        if (!selected?.center) {
+            return true;
+        }
+        const distance = geoDistanceMeters(position, selected.center);
+        if (!Number.isFinite(state.arrival.selectedBestDistanceM)) {
+            state.arrival.selectedBestDistanceM = distance;
+        }
+        if (distance < state.arrival.selectedBestDistanceM) {
+            state.arrival.selectedBestDistanceM = distance;
+            state.arrival.movingAwaySince = 0;
+            return true;
+        }
+        const increase = distance - state.arrival.selectedBestDistanceM;
+        if (state.autoLoad.speedKt < CFG.arrivalWrongAirportMinSpeedKt) {
+            state.arrival.movingAwaySince = 0;
+            return true;
+        }
+        if (increase < CFG.arrivalWrongAirportDistanceIncreaseM) {
+            state.arrival.movingAwaySince = 0;
+            return true;
+        }
+        if (!state.arrival.movingAwaySince) {
+            state.arrival.movingAwaySince = now;
+            return true;
+        }
+        if (now - state.arrival.movingAwaySince < CFG.arrivalWrongAirportStableMs) {
+            return true;
+        }
+        console.log("[TWY ARR] Selected arrival appears wrong; releasing protection.", {
+            airport: airportPrimaryCode(selected),
+            closestDistanceM: state.arrival.selectedBestDistanceM,
+            currentDistanceM: distance,
+            increaseM: increase
+        });
+        state.arrival.protectionUntil = 0;
+        state.arrival.movingAwaySince = 0;
+        return false;
+    }
+    function maybeUnloadDepartedAirport(position, now) {
+        if (!state.queryBounds) {
+            state.arrival.departureOutsideSince = 0;
+            return false;
+        }
+        if (arrivalProtectionActive(position, now)) {
+            state.arrival.departureOutsideSince = 0;
+            return false;
+        }
+        const outside = !autoLoadPositionInsideCoverage(position);
+        if (!outside || state.autoLoad.speedKt < CFG.departureUnloadMinSpeedKt) {
+            state.arrival.departureOutsideSince = 0;
+            return false;
+        }
+        if (!state.arrival.departureOutsideSince) {
+            state.arrival.departureOutsideSince = now;
+            return false;
+        }
+        if (now - state.arrival.departureOutsideSince < CFG.departureUnloadStableMs) {
+            return false;
+        }
+        unloadAirportForFlight();
+        return true;
+    }
+    function nearestFeatureDistanceMeters(position, features) {
+        let best = Infinity;
+        for (const feature of features || []) {
+            const distance = featureDistanceMeters(position, feature);
+            if (distance < best) {
+                best = distance;
+            }
+        }
+        return best;
+    }
+    function arrivalHasGroundGeometry(position) {
+        const datasets = nearbyChunkDatasets(position, Math.max(CFG.detectorSearchRadiusM, CFG.arrivalGroundMovementDistanceM + 40));
+        if (!datasets.length) return false;
+        const runways = collectNearbyFeatures(datasets, "runways");
+        if (nearestRunwayHit(position, runways)) {
+            return true;
+        }
+        const taxiways = collectNearbyFeatures(datasets, "taxiways");
+        const taxilanes = collectNearbyFeatures(datasets, "taxilanes");
+        const taxiwayDistance = nearestFeatureDistanceMeters(position, taxiways);
+        const taxilaneDistance = nearestFeatureDistanceMeters(position, taxilanes);
+        return taxiwayDistance <= CFG.arrivalGroundMovementDistanceM || taxilaneDistance <= CFG.arrivalGroundMovementDistanceM;
+    }
+    function updateArrivalGroundConfirmation(position, now) {
+        const arrival = state.arrival;
+        if (!arrival.manualModifyAvailable || !arrival.selectedAirport) {
+            arrival.groundConfirmSince = 0;
+            return;
+        }
+        const insideCoverage = autoLoadPositionInsideCoverage(position);
+        const slowEnough = state.autoLoad.speedKt <= CFG.autoLoadMaxSpeedKt;
+        if (!insideCoverage || !slowEnough) {
+            arrival.groundConfirmSince = 0;
+            return;
+        }
+        if (!arrivalHasGroundGeometry(position)) {
+            arrival.groundConfirmSince = 0;
+            return;
+        }
+        if (!arrival.groundConfirmSince) {
+            arrival.groundConfirmSince = now;
+            return;
+        }
+        if (now - arrival.groundConfirmSince < CFG.arrivalGroundConfirmMs) {
+            return;
+        }
+        arrival.manualModifyAvailable = false;
+        arrival.groundConfirmSince = 0;
+        arrival.protectionUntil = 0;
+        arrival.selectedAirport = null;
+        arrival.selectedBestDistanceM = null;
+        arrival.movingAwaySince = 0;
+        resetArrivalLockState();
+        disarmModifyArrival();
+        updateUI();
+        console.log("[TWY ARR] Arrival ground confirmed; normal TWY lifecycle resumed.");
+    }
+    function handleActiveArrivalLock(position, now) {
+        const arrival = state.arrival;
+        if (!arrival.manualModifyAvailable || !arrival.selectedAirport) {
+            return false;
+        }
+        if (arrival.preloadReady) {
+            arrival.groundFallbackSince = 0;
+            return true;
+        }
+        if (state.autoLoad.speedKt > CFG.autoLoadMaxSpeedKt) {
+            arrival.groundFallbackSince = 0;
+            return true;
+        }
+        const distance = geoDistanceMeters(position, arrival.selectedAirport.center);
+        if (!Number.isFinite(distance) || distance > CFG.arrivalGroundFallbackRadiusM) {
+            arrival.groundFallbackSince = 0;
+            return true;
+        }
+        if (arrival.groundFallbackAttempts >= CFG.arrivalGroundFallbackMaxAttempts) {
+            return true;
+        }
+        if (now - arrival.groundFallbackLastAttempt < CFG.arrivalGroundFallbackCooldownMs) {
+            arrival.groundFallbackSince = 0;
+            return true;
+        }
+        if (!arrival.groundFallbackSince) {
+            arrival.groundFallbackSince = now;
+            return true;
+        }
+        if (now - arrival.groundFallbackSince < CFG.arrivalGroundFallbackStableMs) {
+            return true;
+        }
+        arrival.groundFallbackSince = 0;
+        arrival.groundFallbackLastAttempt = now;
+        arrival.groundFallbackAttempts++;
+        const airport = arrival.selectedAirport;
+        console.log("[TWY ARR] Preload had no useful data; trying ground-centred ARR recovery.", {
+            airport: airportPrimaryCode(airport),
+            attempt: arrival.groundFallbackAttempts,
+            distanceM: distance
+        });
+        loadAirport({
+            automatic: true,
+            arrival: true,
+            groundFallback: true,
+            center: position,
+            airport: airport
+        });
+        return true;
+    }
+    function autoLoadTick() {
+        if (!state.autoLoadEnabled) return;
+        if (state.running) return;
+        const position = aircraftLL();
+        if (!Number.isFinite(position.lat) || !Number.isFinite(position.lon)) {
+            return;
+        }
+        const now = Date.now();
+        updateAutoLoadMotion(position, now);
+        updateArrivalGroundConfirmation(position, now);
+        if (maybeUnloadDepartedAirport(position, now)) {
+            return;
+        }
+        if (handleActiveArrivalLock(position, now)) {
+            return;
+        }
+        if (now - state.autoLoad.startedAt < CFG.autoLoadInitialDelayMs) {
+            state.autoLoad.candidateSince = 0;
+            return;
+        }
+        if (autoLoadResetBlockActive(position)) {
+            state.autoLoad.candidateSince = 0;
+            return;
+        }
+        if (state.autoLoad.speedKt > CFG.autoLoadMaxSpeedKt) {
+            state.autoLoad.candidateSince = 0;
+            return;
+        }
+        if (autoLoadPositionInsideCoverage(position)) {
+            state.autoLoad.candidateSince = 0;
+            return;
+        }
+        if (now - state.autoLoad.lastTriggerTime < CFG.autoLoadCooldownMs) {
+            state.autoLoad.candidateSince = 0;
+            return;
+        }
+        if (!state.autoLoad.candidateSince) {
+            state.autoLoad.candidateSince = now;
+            return;
+        }
+        if (now - state.autoLoad.candidateSince < CFG.autoLoadStableMs) {
+            return;
+        }
+        state.autoLoad.candidateSince = 0;
+        state.autoLoad.lastTriggerTime = now;
+        console.log("[TWY AUTOLOAD] Stable ground position outside current coverage; loading airport.", {
+            lat: position.lat,
+            lon: position.lon,
+            speedKt: state.autoLoad.speedKt
+        });
+        loadAirport({
+            automatic: true
+        });
+    }
+    function startAutoLoadMonitor() {
+        if (state.autoLoadTimer) return;
+        state.autoLoad.startedAt = Date.now();
+        state.autoLoadTimer = setInterval(autoLoadTick, CFG.autoLoadCheckMs);
+    }
+    function abortActiveWork() {
+        state.loadGeneration++;
+        for (const controller of state.controllers) {
+            try {
+                controller.abort();
+            } catch (_) {}
+        }
+        state.controllers.clear();
+        state.requestGate = Promise.resolve();
+        state.lastRequestStart = 0;
+        if (state.renderTimer) {
+            clearTimeout(state.renderTimer);
+            state.renderTimer = null;
+        }
+        state.pendingRenderQuality = 0;
+        state.renderSerial++;
+    }
+    async function loadAirport(options = {}) {
+        if (state.running) return;
+        disarmModifyArrival();
+        const automatic = !!options.automatic;
+        const arrival = !!options.arrival;
+        const sourceCenter = options.center || aircraftLL();
+        const center = {
+            lat: Number(sourceCenter?.lat),
+            lon: Number(sourceCenter?.lon)
+        };
+        if (!Number.isFinite(center.lat) || !Number.isFinite(center.lon)) {
+            setStatus("Could not find aircraft position", "error");
+            return;
+        }
+        abortActiveWork();
+        resetDetectorState();
+        clearNotificationQueue();
+        closeArrivalChooser();
+        state.arrivalMode = false;
+        state.arrival.departureOutsideSince = 0;
+        if (!arrival) {
+            state.arrival.protectionUntil = 0;
+            state.arrival.selectedAirport = null;
+            state.arrival.manualModifyAvailable = false;
+            state.arrival.groundConfirmSince = 0;
+            resetArrivalLockState();
+            state.arrival.selectedBestDistanceM = null;
+            state.arrival.movingAwaySince = 0;
+        }
+        state.autoLoad.resetBlockPosition = null;
+        state.autoLoad.candidateSince = 0;
+        state.autoLoad.lastTriggerTime = Date.now();
+        const generation = state.loadGeneration;
+        const chunks = makeChunks(center);
+        const signature = gridSignature(chunks);
+        const moved = state.gridSignature !== null && state.gridSignature !== signature;
+        if (moved) {
+            removeCurrentOverlay();
+            removeStandLocatorEntities({
+                clearSelection: true
+            });
+        } else {
+            removeStandLocatorEntities({
+                clearSelection: false
+            });
+        }
+        clearRuntimeData();
+        state.running = true;
+        state.chunks = chunks;
+        state.queryBounds = getOverallBounds(chunks);
+        state.gridSignature = signature;
+        state.totalChunks = chunks.length;
+        state.completedChunks = 0;
+        state.successfulChunks = 0;
+        state.failedChunks = 0;
+        state.cachedChunks = 0;
+        state.failedChunkKeys = new Set;
+        state.earlyPreviewRequested = false;
+        state.midPreviewRequested = false;
+        const arrivalCode = arrival && options.airport ? airportPrimaryCode(options.airport) : null;
+        if (arrivalCode && /^[A-Z]{4}$/i.test(arrivalCode)) {} else if (moved && !arrivalCode) {}
+        setStatus(arrivalCode ? `Loading arrival ${arrivalCode}…` : automatic ? "Auto-loading airport ground data…" : "Finding airport ground data…", "loading");
+        updateUI();
+        await runQueue(chunks, generation);
+        if (generation !== state.loadGeneration) return;
+        const hadInitialFailures = state.failedChunkKeys.size > 0;
+        if (hadInitialFailures) {
+            await recoverFailedChunks(generation);
+        }
+        if (generation !== state.loadGeneration) return;
+        state.running = false;
+        if (state.renderTimer) {
+            clearTimeout(state.renderTimer);
+            state.renderTimer = null;
+        }
+        state.pendingRenderQuality = Math.max(state.pendingRenderQuality, 2);
+        await runRenderLoop();
+        reacquireSelectedStandAfterLoad();
+        const usefulData = hasUsefulAirportData();
+        if (arrival && options.airport) {
+            state.arrival.preloadReady = usefulData;
+            if (usefulData) {
+                state.arrival.groundFallbackSince = 0;
+            }
+        }
+        if (!usefulData) {
+            setStatus(arrival && options.airport ? "Arrival preload incomplete · ground retry armed" : "Couldn’t load airport ground data this time", "error");
+        } else if (state.taxiways.size === 0 && state.taxilanes.size === 0) {
+            setStatus("Airport loaded · no mapped taxiways", "ready");
+        } else if (state.failedChunks > 0) {
+            setStatus(`Ready · ${state.failedChunks} area${state.failedChunks === 1 ? "" : "s"} still unavailable after retry`, "loading");
+        } else if (hadInitialFailures) {
+            setStatus("Airport ground ready · missing areas recovered", "ready");
+        } else if (state.cachedChunks === state.totalChunks) {
+            setStatus("Ready · loaded from cache", "ready");
+        } else {
+            setStatus("Airport ground ready", "ready");
+        }
+        updateUI();
+        if (arrival && options.airport && usefulData) {
+            const code = airportPrimaryCode(options.airport);
+            queueNotification("success", "AIRPORT READY", code, state.taxiways.size || state.taxilanes.size ? "Ground map loaded" : "Airport data loaded", `arrival-ready:${code}`, 2400);
+        }
+    }
+    function resetAirport() {
+        const resetPosition = aircraftLL();
+        disarmModifyArrival();
+        abortActiveWork();
+        resetDetectorState();
+        clearNotificationQueue();
+        closeArrivalChooser();
+        state.arrivalMode = false;
+        state.arrival.departureOutsideSince = 0;
+        state.arrival.protectionUntil = 0;
+        state.arrival.selectedAirport = null;
+        state.arrival.manualModifyAvailable = false;
+        state.arrival.groundConfirmSince = 0;
+        resetArrivalLockState();
+        state.running = false;
+        if (Number.isFinite(resetPosition.lat) && Number.isFinite(resetPosition.lon)) {
+            state.autoLoad.resetBlockPosition = {
+                ...resetPosition
+            };
+        }
+        state.autoLoad.candidateSince = 0;
+        removeCurrentOverlay();
+        removeStandLocatorEntities({
+            clearSelection: true
+        });
+        clearGroundCache();
+        clearRuntimeData();
+        state.chunks = [];
+        state.queryBounds = null;
+        state.gridSignature = null;
+        state.totalChunks = 0;
+        state.completedChunks = 0;
+        state.successfulChunks = 0;
+        state.failedChunks = 0;
+        state.cachedChunks = 0;
+        state.failedChunkKeys = new Set;
+        state.earlyPreviewRequested = false;
+        state.midPreviewRequested = false;
+        setStatus(state.autoLoadEnabled ? "Reset · auto-load waits for next airport" : "Ready when you are", "idle");
+        updateUI();
+        console.log("[TWY] Reset complete; airport data and cache cleared.");
+    }
+    async function main() {
+        await waitForGeoFS();
+        addUI();
+        resetDetectorState();
+        startDetector();
+        startAutoLoadMonitor();
+        startStandLocatorMonitor();
+        syncMarshaller();
+        startMinimapMonitor();
+        setStatus(state.autoLoadEnabled ? "Auto-load ready" : "Ready when you are", "idle");
+        updateUI();
+    }
+    main();
+})();
