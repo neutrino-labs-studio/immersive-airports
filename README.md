@@ -124,6 +124,12 @@ For product information and guidance, visit the [Immersive Airports website](htt
 
 Problems and bug reports can be submitted through the repository’s [Issues](https://github.com/neutrino-labs-studio/immersive-airports/issues) page.
 
+### Data accuracy
+
+Immersive Airports generates airport overlays using OpenStreetMap (OSM) data. If taxiways, stands or markings do not align perfectly with the airport shown in GeoFS, this is usually caused by differences between the OSM data and GeoFS scenery, not by the addon itself.
+
+Overlay accuracy therefore depends on the quality and currency of the available OSM data for each airport.
+
 ## Attribution
 
 Airport geographic data is provided by [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) through public Overpass API services.
