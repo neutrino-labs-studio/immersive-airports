@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="immersive-airports-banner.jpeg" alt="Immersive Airports for GeoFS" width="100%">
+  <img src="immersive-airports-hero.jpeg" alt="Immersive Airports for GeoFS" width="100%">
 </p>
 
 <p align="center">
