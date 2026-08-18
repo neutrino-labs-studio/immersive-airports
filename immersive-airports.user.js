@@ -1,9 +1,15 @@
 // ==UserScript==
 // @name         Immersive Airports
 // @namespace    neutrino.labs
-// @version      4.8.3
+// @version      4.8.4
 // @description  Airport ground operations for GeoFS. Taxiway overlays, moving maps, stand guidance and marshalling.
 // @author       Neutrino Labs
+// @homepageURL  https://github.com/neutrino-labs-studio/immersive-airports
+// @supportURL   https://github.com/neutrino-labs-studio/immersive-airports/issues
+// @updateURL    https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports.user.js
+// @downloadURL  https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports.user.js
+// @icon         https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports-icon.png
+// @icon64       https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports-icon.png
 // @match        https://geo-fs.com/geofs.php*
 // @match        https://*.geo-fs.com/geofs.php*
 // @grant        none
