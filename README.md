@@ -110,7 +110,9 @@ Performance and loading time depend on the size of the airport, the amount of av
 
 Airport detail and feature availability depend on the geographic data available for each location.
 
+## Recommended companion addon
 
+For an even more immersive airport experience, pair Immersive Airports with the [Taxiway Lights addon](https://github.com/tylerbmusic/GeoFS-Taxiway-Lights/blob/main/userscript.js).
 
 ## Updates
 
