@@ -98,6 +98,48 @@ Open GeoFS normally. Immersive Airports will load automatically when the simulat
 | **− / +** | Zooms the moving map out or in. |
 | **×** | Closes the moving map. |
 
+## How it works
+
+Immersive Airports continuously responds to the aircraft, flight phase and surrounding airport environment. It's made to combine intelligent airport detection, chunked geographic-data loading, local caching and live ground guidance into one integrated system.
+
+<details>
+<summary><strong>The fancy tech behind Immersive Airports</strong></summary>
+
+### It knows its airports
+
+The addon monitors the aircraft’s position and automatically identifies the active airport. It manages departure cleanup, arrival preparation and destination selection as the flight progresses. 
+
+### Smart data loading
+
+Airport geometry is retrieved from OpenStreetMap through multiple public Overpass API services. Large airports are divided into manageable geographic chunks and loaded progressively.
+
+Our system includes:
+
+- Multiple-server failover
+- Controlled concurrent requests
+- Request spacing and timeout handling
+- Automatic retries
+- Duplicate-request prevention
+- Coalesced rendering updates
+
+### It also remembers airports (local airport cache)
+
+Downloaded airport data is stored locally in the browser. Returning to a previously visited airport can therefore take only seconds while reducing unnecessary requests to public data services.
+
+### Dynamic ground environment
+
+Airport data is converted into an interactive environment containing taxiway overlays, labels, stand positions, lead-in guidance, awareness zones and moving-map geometry.
+
+### Live flight integration
+
+The system continuously synchronizes with the aircraft to provide moving-map tracking, taxiway and runway notifications, departure cleanup, arrival preparation and stand-distance calculations.
+
+### Stand guidance and marshalling
+
+After selecting a stand, Immersive Airports calculates the aircraft’s position relative to the parking point and lead-in direction. Guidance transitions into dynamic marshalling instructions as the aircraft approaches.
+
+</details>
+
 ## Compatibility
 ### Recommended
 
