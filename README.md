@@ -98,6 +98,7 @@ Open GeoFS normally. Immersive Airports will load automatically when the simulat
 | **− / +** | Zooms the moving map out or in. |
 | **×** | Closes the moving map. |
 
+
 ## How it works
 
 Immersive Airports continuously responds to the aircraft, flight phase and surrounding airport environment. It's made to combine intelligent airport detection, chunked geographic-data loading, local caching and live ground guidance into one integrated system.
@@ -139,6 +140,11 @@ The system continuously synchronizes with the aircraft to provide moving-map tra
 After selecting a stand, Immersive Airports calculates the aircraft’s position relative to the parking point and lead-in direction. Guidance transitions into dynamic marshalling instructions as the aircraft approaches.
 
 </details>
+
+<p align="center">
+  <img src="immersive-airports-before-after.jpeg"
+       alt="GeoFS before and after using Immersive Airports"
+       width="100%">
 
 ## Compatibility
 ### Recommended
