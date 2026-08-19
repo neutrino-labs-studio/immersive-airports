@@ -26,6 +26,31 @@
 
 Immersive Airports is the addon designed to completely revamp ground operations in GeoFS with dynamic airport overlays, automatic airport awareness, moving maps, stand guidance and animated marshalling.
 
+<details>
+<summary><strong>💬 Message from the team</strong></summary>
+
+<br>
+
+Playing GeoFS for several years, we always felt like airports were one of the hardest parts of the experience to properly use.
+
+Like many other players trying to simulate real flights, we often ended up parking somewhere that simply felt right, taxiing along routes we could barely make out, and never really knowing whether the airport we were flying to would actually be easy to navigate once we got there.
+
+That never sat quite right with us, because it felt like the missing piece of a puzzle GeoFS had already solved almost everywhere else.
+
+Throughout the development of Immersive Airports, we spent a lot of time flying with different beta versions, testing features, changing things, breaking things, and figuring out what actually made ground operations feel better.
+
+And at this point, the truth is that GeoFS feels incomplete to us without it installed.
+
+Most of the time, Immersive Airports simply sits in the background and takes care of things by itself. It knows where you are, remembers your preferences from one session to another, and gives you a much more enjoyable ground experience without constantly asking for your attention.
+
+There is something genuinely satisfying about approaching a selected stand and suddenly seeing the marshaller come to life and guide you into position without you having to press a single button.
+
+Coming from people who actually play GeoFS, this is the add-on we always wanted to have ourselves.
+
+**Have fun with it, and enjoy Immersive Airports as much as we do! ˙ᵕ˙**
+
+</details>
+
 ## Features
 
 - Dynamic taxiway and airport ground overlays
