@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Immersive Airports
 // @namespace    neutrino.labs
-// @version      4.8.4
+// @version      4.8.5
 // @description  Airport ground operations for GeoFS. Taxiway overlays, moving maps, stand guidance and marshalling.
 // @author       Neutrino Labs
 // @homepageURL  https://github.com/neutrino-labs-studio/immersive-airports
@@ -235,6 +235,8 @@
         minimapPanLocked: false,
         notificationButton: null,
         notificationHost: null,
+        arrivalModeLabel: null,
+        arrivalModeCueTimer: null,
         notificationQueue: [],
         notificationShowing: false,
         notificationHideTimer: null,
@@ -408,7 +410,7 @@
             return;
         }
         const oldAirport = state.arrival.selectedAirport;
-        const oldCode = oldAirport ? airportPrimaryCode(oldAirport) : "ARRIVAL";
+        const oldCode = airportReleaseLabel(oldAirport);
         disarmModifyArrival();
         clearAirportRuntimeKeepCache();
         state.arrivalMode = true;
@@ -430,6 +432,7 @@
         setStatus("Arrival released · choose another", "idle");
         updateStandLocatorStatus();
         updateUI();
+        showArrivalModeCue();
         queueNotification("warning", "ARRIVAL RELEASED", oldCode, "Choose another arrival airport", `arrival-released:${oldCode}`, 2200);
         setTimeout(() => {
             if (state.arrivalMode) {
@@ -661,10 +664,30 @@
         if (points.length < 2) {
             return null;
         }
-        const a = points[points.length - 2];
-        const b = points[points.length - 1];
+        const target = parkingTargetPoint(feature);
+        const targetAtStart = target === points[0];
+        const a = targetAtStart ? points[1] : points[points.length - 2];
+        const b = targetAtStart ? points[0] : points[points.length - 1];
         if (!a || !b) return null;
         return bearingDegrees(a, b);
+    }
+    function showArrivalModeCue() {
+        if (!state.root || !state.arrivalModeLabel) return;
+        if (state.arrivalModeCueTimer) {
+            clearTimeout(state.arrivalModeCueTimer);
+            state.arrivalModeCueTimer = null;
+        }
+        state.root.classList.add("dock-open", "arrival-cue");
+        state.arrivalModeLabel.classList.add("show");
+        state.arrivalModeCueTimer = setTimeout(() => {
+            state.arrivalModeLabel?.classList.remove("show");
+            state.root?.classList.remove("dock-open", "arrival-cue");
+            state.panel?.classList.remove("open");
+            state.menuButton?.classList.remove("active");
+            state.standPanel?.classList.remove("open");
+            state.standButton?.classList.remove("active");
+            state.arrivalModeCueTimer = null;
+        }, 2400);
     }
     function marshallerOrientedAxisBearing(feature, aircraft, target) {
         let axis = marshallerStandAxisBearing(feature);
@@ -1048,15 +1071,21 @@
             const target = standTargetPoint(feature);
             if (!target) continue;
             const distance = Number.isFinite(aircraft.lat) && Number.isFinite(aircraft.lon) ? geoDistanceMeters(aircraft, target) : Infinity;
+            const taxiwayDistance = distanceToMovementNetwork(target, [ state.taxiways ]);
             matches.push({
                 feature: feature,
                 ref: ref.toUpperCase(),
                 target: target,
-                distance: distance
+                distance: distance,
+                taxiwayClearance: Number.isFinite(taxiwayDistance) ? taxiwayDistance : 1e6
             });
         }
         if (!matches.length) return null;
-        matches.sort((a, b) => a.distance - b.distance);
+        matches.sort((a, b) => {
+            const clearanceDifference = b.taxiwayClearance - a.taxiwayClearance;
+            if (Math.abs(clearanceDifference) > 2) return clearanceDifference;
+            return a.distance - b.distance;
+        });
         return matches[0];
     }
     function createStandPinImage() {
@@ -1915,6 +1944,12 @@
     function airportPrimaryCode(candidate) {
         return (candidate.icao || candidate.iata || candidate.ref || "AIRPORT").toUpperCase();
     }
+    function airportReleaseLabel(candidate) {
+        const tags = candidate?.tags || {};
+        const code = cleanRef(candidate?.icao) || cleanRef(candidate?.iata) || cleanRef(candidate?.ref) || cleanRef(tags.icao) || cleanRef(tags.iata) || cleanRef(tags.ref);
+        if (code) return code.toUpperCase();
+        return cleanRef(candidate?.name) || cleanRef(tags.name) || cleanRef(tags["name:en"]) || "ARRIVAL";
+    }
     function airportSecondaryCode(candidate) {
         const primary = airportPrimaryCode(candidate);
         const values = [ candidate.icao, candidate.iata, candidate.ref ].filter(Boolean).map(value => String(value).toUpperCase()).filter(value => value !== primary);
@@ -2169,12 +2204,123 @@
         const style = document.createElement("style");
         style.id = "geofs-twy-style";
         style.textContent = `\n            #geofs-twy-ui {\n                position: relative;\n                display: inline-flex;\n                align-items: center;\n                font-family: Arial, Helvetica, sans-serif;\n                color: #eee;\n                user-select: none;\n                overflow: visible;\n            }\n\n            #geofs-twy-ui * { box-sizing: border-box; }\n\n            #twy-brand {\n                position: absolute;\n                right: 0;\n                bottom: calc(100% + 6px);\n                display: flex;\n                align-items: center;\n                gap: 5px;\n                white-space: nowrap;\n                pointer-events: none;\n            }\n\n            #twy-brand img {\n                width: auto;\n                height: 18px;\n                display: block;\n                filter:\n                    drop-shadow(0 1px 1px rgba(0,0,0,.78))\n                    drop-shadow(0 0 4px rgba(0,0,0,.42));\n            }\n\n            #twy-brand span {\n                font-size: 10px;\n                font-weight: 700;\n                letter-spacing: .55px;\n                color: #eef0f1;\n                line-height: 1;\n                text-shadow:\n                    0 1px 1px rgba(0,0,0,.88),\n                    0 0 4px rgba(0,0,0,.52),\n                    0 0 8px rgba(0,0,0,.24);\n            }\n\n\n            \n            #twy-menu-button,\n            #twy-stand-button {\n                min-width: 42px;\n                width: 42px;\n                padding-left: 0;\n                padding-right: 0;\n\n                font-size: 10px;\n                font-weight: 700;\n                letter-spacing: .45px;\n                line-height: inherit;\n                text-align: center;\n            }\n\n            #twy-menu-button.active,\n            #twy-stand-button.active {\n                background: rgba(255,255,255,.14);\n            }\n\n            #twy-menu-button.arrival-mode {\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,.88);\n            }\n\n            #twy-stand-button {\n                \n                position: absolute;\n                top: calc(100% + 4px);\n                right: 0;\n                z-index: 4;\n            }\n\n            \n            #twy-stand-button.selected {\n                color: inherit;\n                background: inherit;\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,.88);\n            }\n\n            #twy-stand-button.selected:hover {\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,1);\n            }\n\n\n            #twy-map-button {\n                position: absolute;\n                top: calc(200% + 8px);\n                right: 0;\n                z-index: 4;\n                min-width: 42px;\n                width: 42px;\n                padding-left: 0;\n                padding-right: 0;\n                font-size: 10px;\n                font-weight: 700;\n                letter-spacing: .45px;\n                line-height: inherit;\n                text-align: center;\n            }\n\n            #twy-map-button.active {\n                box-shadow: inset 0 -2px 0 rgba(255,210,26,.88);\n            }\n\n            #twy-map-button.unavailable,\n            #twy-map-button:disabled {\n                opacity: .35;\n                cursor: default;\n                box-shadow: none;\n            }\n\n            #twy-minimap-window {\n                position: fixed;\n                right: 112px;\n                bottom: 92px;\n                width: 232px;\n                display: none;\n                overflow: hidden;\n                border: 1px solid rgba(255,255,255,.14);\n                border-radius: 6px;\n                background: #15181a;\n                box-shadow: 0 6px 18px rgba(0,0,0,.42);\n                z-index: 2147483600;\n                color: #eef0f1;\n                font-family: Arial, Helvetica, sans-serif;\n                user-select: none;\n            }\n\n            #twy-minimap-window.open { display: block; }\n\n            #twy-minimap-header {\n                height: 28px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                padding: 0 7px 0 9px;\n                border-bottom: 1px solid rgba(255,255,255,.10);\n                background: #202326;\n                cursor: move;\n            }\n\n            #twy-minimap-logo {\n                display: block;\n                width: auto;\n                height: 12px;\n                opacity: .92;\n                filter:\n                    drop-shadow(0 1px 1px rgba(0,0,0,.72))\n                    drop-shadow(0 0 3px rgba(0,0,0,.30));\n            }\n\n            #twy-minimap-controls {\n                display: flex;\n                align-items: center;\n                gap: 2px;\n            }\n\n            #twy-minimap-range {\n                min-width: 43px;\n                color: #aeb4b8;\n                font-size: 7px;\n                font-weight: 700;\n                text-align: center;\n                letter-spacing: .2px;\n            }\n\n            #twy-minimap-lock,\n            #twy-minimap-zoom-in,\n            #twy-minimap-zoom-out,\n            #twy-minimap-close {\n                width: 22px;\n                height: 20px;\n                padding: 0;\n                border: 0;\n                border-radius: 3px;\n                background: transparent;\n                color: #aeb4b8;\n                cursor: pointer;\n                font: 700 13px Arial;\n                line-height: 20px;\n                text-align: center;\n            }\n\n            #twy-minimap-lock {\n                width: 42px;\n                font-size: 7px;\n                letter-spacing: .25px;\n            }\n\n            #twy-minimap-lock.active {\n                color: #ffe263;\n                background: rgba(255,210,26,.10);\n            }\n\n            #twy-minimap-lock:hover,\n            #twy-minimap-zoom-in:hover,\n            #twy-minimap-zoom-out:hover,\n            #twy-minimap-close:hover {\n                color: #fff;\n                background: rgba(255,255,255,.07);\n            }\n\n            #twy-minimap-lock:disabled,\n            #twy-minimap-zoom-in:disabled,\n            #twy-minimap-zoom-out:disabled {\n                opacity: .28;\n                cursor: default;\n                background: transparent;\n            }\n\n            #twy-minimap-canvas {\n                display: block;\n                margin: 6px;\n                border: 1px solid rgba(255,255,255,.08);\n                background: #15181a;\n                cursor: grab;\n            }\n\n            #twy-minimap-canvas:active {\n                cursor: grabbing;\n            }\n\n            #twy-stand-panel {\n                position: absolute;\n                top: calc(100% + 4px);\n                right: 48px;\n\n                width: 226px;\n                padding: 11px;\n\n                display: none;\n\n                border: 1px solid rgba(255,255,255,.12);\n                border-radius: 7px;\n                background: rgba(25,27,30,.98);\n                box-shadow: 0 6px 18px rgba(0,0,0,.34);\n                color: #e8eaec;\n\n                z-index: 1000002;\n            }\n\n            #twy-stand-panel.open {\n                display: block;\n            }\n\n            .twy-stand-search-row {\n                display: flex;\n                gap: 5px;\n                margin-top: 8px;\n            }\n\n            #twy-stand-input {\n                min-width: 0;\n                flex: 1 1 auto;\n                height: 28px;\n\n                padding: 0 8px;\n\n                border: 1px solid rgba(255,255,255,.14);\n                border-radius: 4px;\n                outline: none;\n\n                background: #202326;\n                color: #f0f1f2;\n\n                font: 600 10px Arial, Helvetica, sans-serif;\n            }\n\n            #twy-stand-input:focus {\n                border-color: rgba(255,210,26,.65);\n            }\n\n            #twy-stand-find {\n                flex: 0 0 45px;\n                height: 28px;\n\n                border: 1px solid rgba(255,255,255,.11);\n                border-radius: 4px;\n\n                background: #4c4933;\n                color: #f3e9a5;\n\n                cursor: pointer;\n                font-size: 9px;\n                font-weight: 700;\n            }\n\n            #twy-stand-find:hover {\n                background: #5b573a;\n            }\n\n            #twy-stand-locator-status {\n                min-height: 14px;\n                margin-top: 8px;\n\n                color: #92989d;\n                font-size: 8px;\n                line-height: 1.35;\n            }\n\n            #twy-stand-locator-status[data-mode="selected"] {\n                color: #cfd8d1;\n            }\n\n            #twy-stand-locator-status[data-mode="error"] {\n                color: #d8a6a6;\n            }\n\n            .twy-stand-marshaller-row {\n                margin-top: 7px;\n                padding-top: 7px;\n                border-top: 1px solid rgba(255,255,255,.07);\n            }\n\n            .twy-marshaller-offset-row {\n                min-height: 24px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 8px;\n            }\n\n            .twy-marshaller-offset-label {\n                color: #858b90;\n                font-size: 7px;\n                font-weight: 700;\n                letter-spacing: .35px;\n            }\n\n            .twy-marshaller-offset-controls {\n                display: flex;\n                align-items: center;\n                gap: 3px;\n            }\n\n            #twy-marshaller-offset-minus,\n            #twy-marshaller-offset-plus {\n                width: 21px;\n                height: 19px;\n                padding: 0;\n                border: 1px solid rgba(255,255,255,.10);\n                border-radius: 3px;\n                background: #34383c;\n                color: #d5d8da;\n                cursor: pointer;\n                font: 700 11px Arial;\n                line-height: 17px;\n            }\n\n            #twy-marshaller-offset-minus:hover,\n            #twy-marshaller-offset-plus:hover {\n                background: #41464b;\n            }\n\n            #twy-marshaller-offset-minus:disabled,\n            #twy-marshaller-offset-plus:disabled {\n                opacity: .3;\n                cursor: default;\n            }\n\n            #twy-marshaller-offset-value {\n                min-width: 34px;\n                color: #cfd2d4;\n                font-size: 8px;\n                font-weight: 700;\n                text-align: center;\n            }\n\n            #twy-stand-clear {\n                width: 100%;\n                height: 25px;\n                margin-top: 7px;\n\n                border: 1px solid rgba(255,255,255,.10);\n                border-radius: 4px;\n\n                background: #34383c;\n                color: #c9cccf;\n\n                cursor: pointer;\n                font-size: 8px;\n                font-weight: 600;\n            }\n\n            #twy-stand-clear:hover {\n                background: #41464b;\n            }\n\n            #twy-notif-button {\n                \n                position: absolute;\n                top: 0;\n                right: 46px;\n\n                min-width: 46px;\n                width: 46px;\n                padding-left: 0;\n                padding-right: 0;\n                font-size: 9px;\n                font-weight: 700;\n                letter-spacing: .35px;\n                text-align: center;\n                transition: background .15s ease, opacity .15s ease;\n                z-index: 3;\n            }\n\n            #twy-notif-button.notif-on {\n                background: rgba(86,127,96,.88);\n                color: #f4f6f4;\n            }\n\n            #twy-notif-button.notif-off {\n                background: rgba(55,58,62,.76);\n                color: #9ca1a5;\n                opacity: .78;\n            }\n\n\n            #twy-arrival-host {\n                position: fixed !important;\n                left: 50vw !important;\n                top: clamp(118px, 16vh, 170px) !important;\n                transform: translateX(-50%) !important;\n\n                width: min(430px, calc(100vw - 24px));\n                max-width: calc(100vw - 24px);\n\n                display: none;\n                pointer-events: auto;\n\n                z-index: 2147483647 !important;\n                font-family: Arial, Helvetica, sans-serif;\n            }\n\n            #twy-arrival-host.open {\n                display: block;\n            }\n\n            .twy-arrival-card {\n                width: 100%;\n                padding: 14px;\n\n                border: 1px solid rgba(255,255,255,.13);\n                border-left: 4px solid #FFD21A;\n                border-radius: 7px;\n\n                background: rgba(17,19,21,.98);\n                box-shadow: 0 8px 26px rgba(0,0,0,.44);\n\n                color: #f0f1f2;\n                cursor: grab;\n            }\n\n            .twy-arrival-card:active {\n                cursor: grabbing;\n            }\n\n            .twy-arrival-card button,\n            .twy-arrival-card input {\n                cursor: pointer;\n            }\n\n            .twy-arrival-title {\n                font-size: 11px;\n                font-weight: 800;\n                letter-spacing: .9px;\n                text-align: center;\n                cursor: grab;\n            }\n\n            .twy-arrival-subtitle {\n                margin-top: 4px;\n                color: #92989d;\n                font-size: 8px;\n                text-align: center;\n                cursor: grab;\n            }\n\n            .twy-arrival-loading,\n            .twy-arrival-error {\n                margin: 14px 0 10px;\n                padding: 10px;\n\n                border-radius: 5px;\n                background: #24272a;\n\n                color: #c9cccf;\n                font-size: 9px;\n                text-align: center;\n            }\n\n            .twy-arrival-error {\n                color: #d8a6a6;\n            }\n\n            .twy-arrival-list {\n                display: grid;\n                gap: 5px;\n                margin-top: 11px;\n            }\n\n            .twy-arrival-choice {\n                position: relative;\n                width: 100%;\n                min-height: 54px;\n                padding: 8px 70px 8px 10px;\n\n                border: 1px solid rgba(255,255,255,.09);\n                border-radius: 5px;\n\n                background: #272a2d;\n                color: #f0f1f2;\n\n                cursor: pointer;\n                text-align: left;\n            }\n\n            .twy-arrival-choice:hover {\n                border-color: rgba(255,210,26,.42);\n                background: #303438;\n            }\n\n            .twy-arrival-choice-main {\n                display: flex;\n                align-items: center;\n                gap: 6px;\n            }\n\n            .twy-arrival-code {\n                font-size: 12px;\n                font-weight: 800;\n                letter-spacing: .35px;\n            }\n\n            .twy-arrival-ahead {\n                padding: 2px 4px;\n                border-radius: 3px;\n                background: rgba(255,210,26,.14);\n                color: #e5cf70;\n                font-size: 7px;\n                font-weight: 700;\n                letter-spacing: .4px;\n            }\n\n            .twy-arrival-name {\n                margin-top: 3px;\n                overflow: hidden;\n\n                color: #9fa5aa;\n                font-size: 8px;\n                white-space: nowrap;\n                text-overflow: ellipsis;\n            }\n\n            .twy-arrival-distance {\n                position: absolute;\n                right: 10px;\n                top: 50%;\n                transform: translateY(-50%);\n\n                color: #d9dadd;\n                font-size: 10px;\n                font-weight: 700;\n            }\n\n            .twy-arrival-cancel,\n            .twy-arrival-retry {\n                height: 27px;\n                margin-top: 10px;\n\n                border: 1px solid rgba(255,255,255,.10);\n                border-radius: 4px;\n\n                background: #34383c;\n                color: #c9cccf;\n\n                cursor: pointer;\n                font-size: 8px;\n                font-weight: 700;\n            }\n\n            .twy-arrival-cancel {\n                width: 100%;\n            }\n\n            .twy-arrival-actions {\n                display: flex;\n                gap: 6px;\n                margin-top: 10px;\n            }\n\n            .twy-arrival-actions .twy-arrival-retry,\n            .twy-arrival-actions .twy-arrival-cancel {\n                flex: 1 1 0;\n                width: auto;\n                margin-top: 0;\n            }\n\n            .twy-arrival-cancel:hover,\n            .twy-arrival-retry:hover {\n                background: #41464b;\n            }\n\n            #twy-notification-host {\n                \n                position: fixed !important;\n                left: 50vw !important;\n                top: clamp(64px, 9vh, 96px) !important;\n                right: auto !important;\n                bottom: auto !important;\n                transform: translateX(-50%) !important;\n\n                width: min(380px, calc(100vw - 24px));\n                max-width: calc(100vw - 24px);\n\n                pointer-events: none !important;\n                visibility: visible !important;\n                overflow: visible !important;\n\n                \n                z-index: 2147483647 !important;\n\n                font-family: Arial, Helvetica, sans-serif;\n            }\n\n            .twy-notification-card {\n                width: 100%;\n                min-width: 0;\n                padding: 14px 18px 13px;\n                border: 1px solid rgba(255,255,255,.13);\n                border-left: 4px solid #d3b95e;\n                border-radius: 7px;\n                background: rgba(17,19,21,.97);\n                box-shadow: 0 8px 24px rgba(0,0,0,.40);\n                color: #f0f1f2;\n                text-align: center;\n                opacity: 0;\n                transform: translateY(-10px) scale(.985);\n                transition: opacity .18s ease, transform .18s ease;\n            }\n\n            .twy-notification-card.show {\n                opacity: 1;\n                transform: translateY(0) scale(1);\n            }\n\n            .twy-notification-card.warning { border-left-color: #d7a84d; }\n            .twy-notification-card.runway { border-left-color: #c86565; }\n            .twy-notification-card.success { border-left-color: #6f9f79; }\n            .twy-notification-card.taxi { border-left-color: #d3b95e; }\n\n            .twy-notification-title {\n                font-size: 10px;\n                line-height: 1;\n                font-weight: 700;\n                letter-spacing: .95px;\n                color: #aeb3b7;\n            }\n\n            .twy-notification-value {\n                margin-top: 5px;\n                font-size: 25px;\n                line-height: 1.05;\n                font-weight: 800;\n                letter-spacing: .5px;\n                color: #fff;\n            }\n\n            .twy-notification-meta {\n                margin-top: 5px;\n                font-size: 9px;\n                line-height: 1.2;\n                color: #aeb3b7;\n            }\n\n            #twy-panel {\n                position: absolute;\n                top: calc(100% + 6px);\n                right: 0;\n                width: 220px;\n                padding: 11px;\n                display: none;\n                border: 1px solid rgba(255,255,255,.12);\n                border-radius: 7px;\n                background: rgba(25,27,30,.98);\n                box-shadow: 0 6px 18px rgba(0,0,0,.34);\n                color: #e8eaec;\n                z-index: 1000000;\n            }\n\n            #twy-panel.open { display: block; }\n\n            .twy-title { font-size: 11px; font-weight: 700; }\n            .twy-subtitle { margin-top: 2px; color: #858b90; font-size: 8px; }\n\n            .twy-section {\n                margin-top: 9px;\n                padding-top: 8px;\n                border-top: 1px solid rgba(255,255,255,.07);\n            }\n\n            .twy-row {\n                min-height: 24px;\n                display: flex;\n                align-items: center;\n                justify-content: space-between;\n                gap: 10px;\n            }\n\n            .twy-label { color: #cfd2d4; font-size: 9px; font-weight: 600; }\n\n            .twy-switch {\n                position: relative;\n                width: 36px;\n                height: 20px;\n                padding: 0;\n                flex: 0 0 auto;\n                border: 1px solid rgba(255,255,255,.12);\n                border-radius: 11px;\n                background: #4a4f54;\n                cursor: pointer;\n            }\n\n            .twy-switch.on { background: #567f60; }\n\n            .twy-knob {\n                position: absolute;\n                left: 2px;\n                top: 2px;\n                width: 14px;\n                height: 14px;\n                border-radius: 50%;\n                background: #f2f2f2;\n                box-shadow: 0 1px 2px rgba(0,0,0,.32);\n                transition: transform .15s ease;\n            }\n\n            #twy-status { margin-top: 9px; color: #c8cccf; font-size: 9px; }\n\n            .twy-dot {\n                display: inline-block;\n                width: 6px;\n                height: 6px;\n                margin-right: 5px;\n                border-radius: 50%;\n                vertical-align: 1px;\n            }\n\n            .twy-dot.idle { background: #8e9499; }\n            .twy-dot.loading { background: #d2b85f; }\n            .twy-dot.ready { background: #7eae87; }\n            .twy-dot.error { background: #c27e7e; }\n\n            .twy-progress-bg {\n                width: 100%;\n                height: 3px;\n                margin-top: 7px;\n                overflow: hidden;\n                border-radius: 3px;\n                background: #34383c;\n            }\n\n            #twy-progress-fill {\n                width: 0%;\n                height: 100%;\n                border-radius: 3px;\n                background: #d3b95e;\n                transition: width .2s ease;\n            }\n\n            #twy-details {\n                min-height: 10px;\n                margin-top: 5px;\n                color: #858b90;\n                font-size: 8px;\n                line-height: 1.35;\n            }\n\n\n            #twy-modify-arr-wrap {\n                display: none;\n                margin-top: 9px;\n                padding-top: 9px;\n                border-top: 1px solid rgba(255,255,255,.07);\n            }\n\n            #twy-modify-arr-wrap.visible {\n                display: block;\n            }\n\n            #twy-modify-arr-button {\n                position: relative;\n\n                width: 100%;\n                min-height: 43px;\n                padding: 7px 10px 6px;\n\n                overflow: hidden;\n\n                border: 1px solid rgba(217,183,78,.33);\n                border-radius: 5px;\n\n                background:\n                    linear-gradient(\n                        180deg,\n                        rgba(68,66,53,.88),\n                        rgba(47,48,46,.94)\n                    );\n\n                color: #e5ddbb;\n\n                cursor: pointer;\n                text-align: center;\n\n                box-shadow:\n                    inset 0 1px 0 rgba(255,255,255,.06),\n                    0 1px 3px rgba(0,0,0,.24);\n\n                transition:\n                    border-color .12s ease,\n                    background .12s ease,\n                    box-shadow .12s ease,\n                    transform .08s ease;\n            }\n\n            \n            #twy-modify-arr-button::before,\n            #twy-modify-arr-button::after {\n                content: "";\n                position: absolute;\n                top: 4px;\n                bottom: 4px;\n                width: 1px;\n                background: rgba(255,255,255,.09);\n                pointer-events: none;\n            }\n\n            #twy-modify-arr-button::before { left: 9px; }\n            #twy-modify-arr-button::after { right: 9px; }\n\n            #twy-modify-arr-button:hover {\n                border-color: rgba(230,198,91,.52);\n                background:\n                    linear-gradient(\n                        180deg,\n                        rgba(76,73,56,.92),\n                        rgba(52,53,49,.96)\n                    );\n            }\n\n            #twy-modify-arr-button:active {\n                transform: translateY(1px);\n            }\n\n            #twy-modify-arr-button.armed {\n                border-color: rgba(201,101,101,.80);\n\n                background:\n                    linear-gradient(\n                        180deg,\n                        rgba(92,48,48,.96),\n                        rgba(57,36,37,.98)\n                    );\n\n                color: #f2d9d9;\n\n                box-shadow:\n                    inset 0 0 0 1px rgba(255,255,255,.04),\n                    0 0 0 1px rgba(201,101,101,.10),\n                    0 2px 7px rgba(0,0,0,.30);\n            }\n\n            .twy-modify-arr-title {\n                display: block;\n\n                font-size: 10px;\n                line-height: 1.1;\n                font-weight: 800;\n                letter-spacing: .65px;\n            }\n\n            .twy-modify-arr-safe,\n            .twy-modify-arr-confirm {\n                display: block;\n                margin-top: 5px;\n\n                font-size: 7px;\n                line-height: 1;\n                font-weight: 700;\n                letter-spacing: .8px;\n            }\n\n            .twy-modify-arr-safe {\n                color: #9d9b8e;\n            }\n\n            .twy-modify-arr-confirm {\n                color: #e9b8b8;\n            }\n\n            .twy-actions { display: flex; gap: 5px; margin-top: 8px; }\n\n            #twy-load-button,\n            #twy-reset-button {\n                height: 27px;\n                border: 1px solid rgba(255,255,255,.11);\n                border-radius: 4px;\n                background: #383c40;\n                color: #e8e9ea;\n                cursor: pointer;\n                font-size: 9px;\n                font-weight: 600;\n            }\n\n            #twy-load-button { flex: 1 1 auto; }\n            #twy-reset-button { flex: 0 0 52px; color: #d9b9b9; }\n\n            #twy-load-button:hover:not(:disabled),\n            #twy-reset-button:hover { background: #44494e; }\n\n            #twy-load-button:disabled { opacity: .55; cursor: default; }\n\n            .twy-spinner {\n                display: inline-block;\n                width: 8px;\n                height: 8px;\n                margin-right: 4px;\n                border: 1.2px solid rgba(255,255,255,.20);\n                border-top-color: #d3b95e;\n                border-radius: 50%;\n                vertical-align: -1px;\n                animation: twy-spin .8s linear infinite;\n            }\n\n            @keyframes twy-spin { to { transform: rotate(360deg); } }\n\n            #geofs-twy-ui.fallback {\n                position: fixed;\n                right: 12px;\n                bottom: 76px;\n                z-index: 999999;\n            }\n        `;
+        style.textContent += `
+            #geofs-twy-ui,
+            #geofs-twy-ui.fallback {
+                position: fixed !important;
+                left: 0 !important;
+                right: auto !important;
+                top: 50% !important;
+                bottom: auto !important;
+                width: 30px;
+                height: 62px;
+                transform: translateY(-50%);
+                display: block;
+                overflow: visible;
+                z-index: 2147483500;
+            }
+            #twy-edge-toggle {
+                position: absolute;
+                inset: 0;
+                width: 30px;
+                height: 62px;
+                padding: 0;
+                border: 1px solid rgba(242,197,0,.70);
+                border-left: 0;
+                border-radius: 0 8px 8px 0;
+                background: rgba(14,16,18,.94);
+                box-shadow: 3px 3px 12px rgba(0,0,0,.38);
+                color: #f2c500;
+                cursor: pointer;
+            }
+            #twy-edge-toggle:hover { background: rgba(29,31,33,.97); }
+            #twy-edge-toggle img {
+                position: absolute;
+                left: 7px;
+                top: 19px;
+                width: 16px;
+                height: 22px;
+                object-fit: contain;
+                display: block;
+            }
+            #twy-dock-buttons {
+                position: absolute;
+                left: 36px;
+                top: 50%;
+                width: 52px;
+                padding: 5px;
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 4px;
+                border: 1px solid rgba(255,255,255,.12);
+                border-radius: 7px;
+                background: rgba(18,20,22,.95);
+                box-shadow: 0 6px 18px rgba(0,0,0,.38);
+                opacity: 0;
+                visibility: hidden;
+                pointer-events: none;
+                transform: translate(-7px,-50%);
+                transition: opacity .14s ease, transform .14s ease, visibility .14s;
+            }
+            #geofs-twy-ui.dock-open #twy-dock-buttons {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: auto;
+                transform: translate(0,-50%);
+            }
+            #twy-dock-buttons #twy-brand,
+            #twy-dock-buttons #twy-menu-button,
+            #twy-dock-buttons #twy-notif-button,
+            #twy-dock-buttons #twy-stand-button,
+            #twy-dock-buttons #twy-map-button {
+                position: static !important;
+                inset: auto !important;
+                width: 42px;
+                min-width: 42px;
+                margin: 0;
+            }
+            #geofs-twy-ui #twy-panel,
+            #geofs-twy-ui #twy-stand-panel {
+                position: absolute;
+                left: 96px;
+                right: auto;
+                top: 50%;
+                transform: translateY(-50%);
+            }
+            #geofs-twy-ui:not(.dock-open) #twy-panel,
+            #geofs-twy-ui:not(.dock-open) #twy-stand-panel { display: none !important; }
+            #twy-arrival-mode-label {
+                position: absolute;
+                left: 62px;
+                top: -39px;
+                width: max-content;
+                color: #d8dbdd;
+                font: 400 7px/1.2 Arial, Helvetica, sans-serif;
+                letter-spacing: .25px;
+                text-align: center;
+                white-space: nowrap;
+                opacity: 0;
+                transform: translate(-50%, 3px);
+                transition: opacity .14s ease, transform .14s ease;
+                pointer-events: none;
+            }
+            #twy-arrival-mode-label.show {
+                opacity: 1;
+                transform: translate(-50%, 0);
+            }
+        `;
         document.head.appendChild(style);
         const root = document.createElement("div");
         root.id = "geofs-twy-ui";
-        const brand = document.createElement("div");
-        brand.id = "twy-brand";
-        brand.innerHTML = `<img src="${BRAND_LOGO}" alt=""><span>IMMERSIVE AIRPORTS</span>`;
+        const edgeToggle = document.createElement("button");
+        edgeToggle.id = "twy-edge-toggle";
+        edgeToggle.innerHTML = `<img src="${BRAND_LOGO}" alt="">`;
+        const dockButtons = document.createElement("div");
+        dockButtons.id = "twy-dock-buttons";
+        const arrivalModeLabel = document.createElement("div");
+        arrivalModeLabel.id = "twy-arrival-mode-label";
+        arrivalModeLabel.textContent = "ARR MODE ACTIVE";
         const menuButton = document.createElement("button");
         menuButton.id = "twy-menu-button";
         menuButton.className = "geofs-button";
@@ -2201,7 +2347,8 @@
         const panel = document.createElement("div");
         panel.id = "twy-panel";
         panel.innerHTML = `\n            <div class="twy-title">Airport ground</div>\n\n            <div class="twy-section">\n                <div class="twy-row">\n                    <div class="twy-label">Taxiway labels</div>\n                    <button id="twy-label-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n\n                <div class="twy-row">\n                    <div class="twy-label">Stand lead-in lines</div>\n                    <button id="twy-leadin-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n\n                <div class="twy-row">\n                    <div class="twy-label">Stand numbers</div>\n                    <button id="twy-stand-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n\n                <div class="twy-row">\n                    <div class="twy-label">Auto-load airports</div>\n                    <button id="twy-autoload-toggle" class="twy-switch">\n                        <span class="twy-knob"></span>\n                    </button>\n                </div>\n            </div>\n\n            <div id="twy-status">\n                <span id="twy-status-dot" class="twy-dot idle"></span>\n                <span id="twy-status-text">Ready</span>\n            </div>\n\n            <div class="twy-progress-bg">\n                <div id="twy-progress-fill"></div>\n            </div>\n\n            <div id="twy-details"></div>\n\n            <div id="twy-modify-arr-wrap">\n                <button id="twy-modify-arr-button">\n                    <span class="twy-modify-arr-title">MODIFY ARR</span>\n                    <span class="twy-modify-arr-safe">GUARDED</span>\n                </button>\n            </div>\n\n            <div class="twy-actions">\n                <button id="twy-load-button">Load airport</button>\n                <button id="twy-reset-button">Reset</button>\n            </div>\n        `;
-        root.append(brand, menuButton, notificationButton, standButton, mapButton, standPanel, panel);
+        dockButtons.append(notificationButton, menuButton, standButton, mapButton);
+        root.append(edgeToggle, dockButtons, arrivalModeLabel, standPanel, panel);
         const minimapWindow = document.createElement("div");
         minimapWindow.id = "twy-minimap-window";
         minimapWindow.innerHTML = `\n            <div id="twy-minimap-header">\n                <img id="twy-minimap-logo" src="${BRAND_LOGO}" alt="">\n\n                <div id="twy-minimap-controls">\n                    <button id="twy-minimap-lock" title="Map is following the aircraft">FOLLOW</button>\n                    <button id="twy-minimap-zoom-out" title="Zoom out">−</button>\n                    <span id="twy-minimap-range">0.7 NM</span>\n                    <button id="twy-minimap-zoom-in" title="Zoom in">+</button>\n                    <button id="twy-minimap-close" title="Close map">×</button>\n                </div>\n            </div>\n\n            <canvas id="twy-minimap-canvas"></canvas>\n        `;
@@ -2241,6 +2388,7 @@
         state.minimapCanvas = minimapWindow.querySelector("#twy-minimap-canvas");
         state.notificationButton = notificationButton;
         state.notificationHost = notificationHost;
+        state.arrivalModeLabel = arrivalModeLabel;
         state.arrivalChooserHost = arrivalChooserHost;
         state.statusEl = document.getElementById("twy-status-text");
         state.statusDot = document.getElementById("twy-status-dot");
@@ -2288,6 +2436,32 @@
         updateMinimapControls();
         updateMinimapAvailability();
         setMinimapOpen(state.minimapOpen);
+        const setDockOpen = open => {
+            const next = !!open;
+            root.classList.toggle("dock-open", next);
+            const label = next ? "Close Immersive Airports controls" : "Open Immersive Airports controls";
+            edgeToggle.title = label;
+            edgeToggle.setAttribute("aria-label", label);
+            localStorage.setItem("geofsGroundV485DockOpen", String(next));
+            if (!next) {
+                panel.classList.remove("open");
+                menuButton.classList.remove("active");
+                standPanel.classList.remove("open");
+                standButton.classList.remove("active");
+                closeArrivalChooser();
+            }
+        };
+        edgeToggle.onclick = event => {
+            event.stopPropagation();
+            if (state.arrivalModeCueTimer) {
+                clearTimeout(state.arrivalModeCueTimer);
+                state.arrivalModeCueTimer = null;
+                state.arrivalModeLabel?.classList.remove("show");
+                root.classList.remove("arrival-cue");
+            }
+            setDockOpen(!root.classList.contains("dock-open"));
+        };
+        setDockOpen(localStorage.getItem("geofsGroundV485DockOpen") === "true");
         menuButton.onclick = event => {
             event.stopPropagation();
             standPanel.classList.remove("open");
@@ -2989,11 +3163,50 @@
         if (!points.length) return null;
         return points[Math.floor((points.length - 1) / 2)];
     }
+    function distanceToMovementNetwork(point, collections = [ state.taxilanes, state.taxiways ]) {
+        if (!point) return Infinity;
+        let best = Infinity;
+        const latPad = 180 / 111320;
+        const lonPad = 180 / (111320 * Math.max(.15, Math.cos(point.lat * Math.PI / 180)));
+        for (const collection of collections) {
+            for (const movement of collection.values()) {
+                const points = movement.points || [];
+                for (let i = 1; i < points.length; i++) {
+                    const a = points[i - 1];
+                    const b = points[i];
+                    if (point.lat < Math.min(a.lat, b.lat) - latPad || point.lat > Math.max(a.lat, b.lat) + latPad || point.lon < Math.min(a.lon, b.lon) - lonPad || point.lon > Math.max(a.lon, b.lon) + lonPad) {
+                        continue;
+                    }
+                    const distance = pointSegmentDistanceMeters(point, a, b);
+                    if (distance < best) best = distance;
+                    if (best < .25) return best;
+                }
+            }
+        }
+        return best;
+    }
     function parkingTargetPoint(feature) {
         if (feature.point) return feature.point;
         const points = feature.points || [];
         if (!points.length) return null;
-        return points[points.length - 1];
+        if (points.length === 1) return points[0];
+        const stamp = `${state.loadGeneration}:${state.completedChunks}:${state.taxiways.size}:${state.taxilanes.size}`;
+        if (feature.parkingTargetStamp === stamp && feature.parkingTargetPoint) {
+            return feature.parkingTargetPoint;
+        }
+        const first = points[0];
+        const last = points[points.length - 1];
+        const firstDistance = distanceToMovementNetwork(first);
+        const lastDistance = distanceToMovementNetwork(last);
+        let target = last;
+        if (Number.isFinite(firstDistance) && Number.isFinite(lastDistance) && Math.abs(firstDistance - lastDistance) > 1.5) {
+            target = firstDistance > lastDistance ? first : last;
+        } else if (Number.isFinite(firstDistance) !== Number.isFinite(lastDistance)) {
+            target = Number.isFinite(firstDistance) ? last : first;
+        }
+        feature.parkingTargetStamp = stamp;
+        feature.parkingTargetPoint = target;
+        return target;
     }
     function nearbyChunkDatasets(position, radiusM = CFG.detectorSearchRadiusM) {
         if (!state.chunks.length || !state.chunkData.size) return [];
@@ -3521,16 +3734,35 @@
     function drawParking(ctx, toPixel, metersPerPixel) {
         const drawPhysical = state.standLeadInsEnabled;
         const widthPx = CFG.parkingLineWidthM / metersPerPixel;
+        const labelWinnerByRef = new Map;
         for (const feature of state.parking.values()) {
+            const refKey = normalizeStandQuery(normalizeRef(feature.ref));
+            const target = parkingTargetPoint(feature);
+            if (!refKey || !target) continue;
+            const taxiwayDistance = distanceToMovementNetwork(target, [ state.taxiways ]);
+            const score = Number.isFinite(taxiwayDistance) ? taxiwayDistance : 1e6;
+            const existing = labelWinnerByRef.get(refKey);
+            if (!existing || score > existing.score) {
+                labelWinnerByRef.set(refKey, {
+                    feature: feature,
+                    score: score
+                });
+            }
+        }
+        for (const feature of state.parking.values()) {
+            const refKey = normalizeStandQuery(normalizeRef(feature.ref));
+            const drawLabel = !!refKey && labelWinnerByRef.get(refKey)?.feature === feature;
             if (feature.osmType === "way" && feature.points?.length >= 2) {
-                const end = toPixel(feature.points.at(-1));
+                const target = parkingTargetPoint(feature) || feature.points.at(-1);
+                const targetAtStart = target === feature.points[0];
+                const end = toPixel(target);
                 if (drawPhysical) {
                     drawPolyline(ctx, feature.points, toPixel, widthPx, .82);
-                    const before = toPixel(feature.points.at(-2));
+                    const before = toPixel(targetAtStart ? feature.points[1] : feature.points.at(-2));
                     const angle = Math.atan2(end.y - before.y, end.x - before.x) + Math.PI / 2;
                     drawBarLine(ctx, end, angle, CFG.parkingStopBarM / metersPerPixel, 0, widthPx, false, 0, 0);
                 }
-                drawStandText(ctx, normalizeRef(feature.ref), end.x, end.y - 6 / metersPerPixel, metersPerPixel);
+                if (drawLabel) drawStandText(ctx, normalizeRef(feature.ref), end.x, end.y - 6 / metersPerPixel, metersPerPixel);
             } else if (feature.point) {
                 const p = toPixel(feature.point);
                 if (drawPhysical) {
@@ -3542,7 +3774,7 @@
                     ctx.fill();
                     ctx.restore();
                 }
-                drawStandText(ctx, normalizeRef(feature.ref), p.x, p.y - 6 / metersPerPixel, metersPerPixel);
+                if (drawLabel) drawStandText(ctx, normalizeRef(feature.ref), p.x, p.y - 6 / metersPerPixel, metersPerPixel);
             }
         }
     }
@@ -3937,6 +4169,7 @@
         setStatus("Airborne · ARR available", "idle");
         updateStandLocatorStatus();
         updateUI();
+        showArrivalModeCue();
         console.log("[TWY] Departure detected: airport overlay/data unloaded; cache retained.");
     }
     function arrivalProtectionActive(position, now) {
