@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Immersive Airports BETA
 // @namespace    neutrino.labs
-// @version      5.0.0-beta.1
+// @version      5.0.0-beta.4
 // @description  Airport ground operations for GeoFS. Taxiway overlays, moving maps, stand guidance, marshalling and optional ground-grip physics.
 // @author       Neutrino Labs
 // @homepageURL  https://github.com/neutrino-labs-studio/immersive-airports
@@ -110,8 +110,12 @@
         standLocatorLineWidthPx: 4,
         standMetadataCacheLifetimeMs: 7 * 24 * 60 * 60 * 1e3,
         standMetadataCachePrefix: "geofsGroundStandMeta_v1_",
-        standListApronMaxDistanceM: 180,
-        standListTerminalMaxDistanceM: 2e3,
+        standListApronMaxDistanceM: 35,
+        standListTerminalMaxDistanceM: 140,
+        standListTerminalNodeMaxDistanceM: 85,
+        standListGateMatchMaxDistanceM: 60,
+        standListTerminalAmbiguityM: 35,
+        standListRemoteMinTerminalDistanceM: 300,
         marshallerUpdateMs: 180,
         marshallerDisplayDistanceM: 350,
         marshallerActiveRangeM: 120,
@@ -126,6 +130,7 @@
         marshallerSlowDistanceM: 18,
         marshallerWorldAheadM: 18,
         marshallerWorldHeightM: 4.5,
+        marshallerMinAircraftClearanceM: 75,
         marshallerFaceMeHeadingThresholdDeg: 25,
         marshallerFaceMeMinRemainingM: 25,
         marshallerLateralThresholdM: 1.8,
@@ -325,6 +330,7 @@
         standListButton: null,
         standListWindow: null,
         standListSummary: null,
+        standListSearchInput: null,
         standListBody: null,
         standMetadata: null,
         standMetadataSource: null,
@@ -419,6 +425,13 @@
         followMeTimer: null,
         marshaller: {
             entity: null,
+            badgeEntity: null,
+            badgeText: null,
+            worldPoint: null,
+            placementMode: null,
+            active: false,
+            scene: null,
+            unsubscribeRender: null,
             signal: null,
             phase: -1,
             imageCache: new Map,
@@ -464,6 +477,9 @@
             selectedFeature: null,
             selectedTarget: null,
             markerEntity: null,
+            labelEntity: null,
+            labelText: null,
+            labelImageCache: new Map,
             leadInEntity: null,
             markerImage: null,
             lastDistanceM: null
@@ -1197,12 +1213,20 @@
     }
     function removeMarshallerEntity() {
         const entities = getCesiumEntityCollection();
-        if (entities && state.marshaller.entity) {
-            try {
-                entities.remove(state.marshaller.entity);
-            } catch (_) {}
+        if (entities) {
+            for (const entity of [ state.marshaller.entity, state.marshaller.badgeEntity ]) {
+                if (!entity) continue;
+                try {
+                    entities.remove(entity);
+                } catch (_) {}
+            }
         }
         state.marshaller.entity = null;
+        state.marshaller.badgeEntity = null;
+        state.marshaller.badgeText = null;
+        state.marshaller.worldPoint = null;
+        state.marshaller.placementMode = null;
+        state.marshaller.active = false;
         state.marshaller.signal = null;
         state.marshaller.phase = -1;
     }
@@ -1211,6 +1235,11 @@
             clearInterval(state.marshallerTimer);
             state.marshallerTimer = null;
         }
+        if (state.marshaller.unsubscribeRender) {
+            try { state.marshaller.unsubscribeRender(); } catch (_) {}
+            state.marshaller.unsubscribeRender = null;
+        }
+        state.marshaller.scene = null;
     }
     function marshallerStandAxisBearing(feature) {
         const points = feature?.points || [];
@@ -1475,6 +1504,108 @@
         state.marshaller.imageCache.set(cacheKey, image);
         return image;
     }
+    // Keep one real-world marshaller near the stand when it fits on screen.
+    // Otherwise, move that same sign onto a camera ray inside the upper safe
+    // region, away from the aircraft and with room for its distance badge.
+    // Recalculate each frame so changing cameras or resuming a tab cannot
+    // leave a stale billboard in the middle of the aircraft.
+    function positionMarshallerForView(scene = window.geofs?.api?.viewer?.scene) {
+        const Cesium = window.Cesium;
+        const marshaller = state.marshaller;
+        const camera = scene?.camera;
+        const canvas = scene?.canvas;
+        if (!marshaller.entity || !marshaller.worldPoint || !Cesium || !camera || !canvas) return;
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        if (!(width > 0 && height > 0)) return;
+
+        const minX = Math.min(85, width * .25);
+        const maxX = Math.max(minX, width - 245);
+        const minY = Math.min(116, height * .28);
+        const maxY = Math.max(minY, height * .44);
+        const middleX = clamp(width * .52, minX, maxX);
+        const middleY = clamp(height * .32, minY, maxY);
+        const point = marshaller.worldPoint;
+        let groundHeight = null;
+        try {
+            if (Cesium.Cartographic?.fromDegrees && scene.globe?.getHeight) {
+                groundHeight = scene.globe.getHeight(Cesium.Cartographic.fromDegrees(point.lon, point.lat));
+            }
+        } catch (_) {}
+        const physicalPosition = Cesium.Cartesian3.fromDegrees(
+            point.lon, point.lat,
+            Number.isFinite(groundHeight) ? groundHeight + CFG.marshallerWorldHeightM : CFG.marshallerWorldHeightM
+        );
+
+        let projected = null;
+        try {
+            const transforms = Cesium.SceneTransforms;
+            const projection = transforms?.worldToWindowCoordinates || transforms?.wgs84ToWindowCoordinates;
+            const cameraPosition = camera.positionWC || camera.position;
+            const cameraDirection = camera.directionWC || camera.direction;
+            const relative = Cesium.Cartesian3.subtract(physicalPosition, cameraPosition, new Cesium.Cartesian3());
+            if (Cesium.Cartesian3.dot(relative, cameraDirection) > 0 && projection) {
+                projected = projection.call(transforms, scene, physicalPosition);
+            }
+        } catch (_) {}
+
+        const hasScreenPoint = Number.isFinite(projected?.x) && Number.isFinite(projected?.y);
+        const x = hasScreenPoint ? clamp(projected.x, minX, maxX) : middleX;
+        const y = hasScreenPoint ? clamp(projected.y, minY, maxY) : middleY;
+        const aircraft = aircraftLL();
+        const clearOfAircraft = Number.isFinite(aircraft.lat) && Number.isFinite(aircraft.lon)
+            && geoDistanceMeters(aircraft, point) >= CFG.marshallerMinAircraftClearanceM;
+        const onSafeScreen = clearOfAircraft && hasScreenPoint && projected.x === x && projected.y === y;
+        let placement = physicalPosition;
+        let mode = "world";
+        if (!onSafeScreen) {
+            const ray = camera.getPickRay?.(new Cesium.Cartesian2(x, y));
+            if (!ray?.origin || !ray?.direction) return;
+            placement = Cesium.Cartesian3.add(
+                ray.origin,
+                Cesium.Cartesian3.multiplyByScalar(ray.direction, 160, new Cesium.Cartesian3()),
+                new Cesium.Cartesian3()
+            );
+            mode = "screen-safe";
+        }
+
+        if (marshaller.placementMode !== mode || mode === "screen-safe") {
+            const heightReference = mode === "world"
+                ? Cesium.HeightReference?.RELATIVE_TO_GROUND
+                : Cesium.HeightReference?.NONE;
+            for (const entity of [ marshaller.entity, marshaller.badgeEntity ]) {
+                if (!entity) continue;
+                entity.position = placement;
+                if (entity.billboard) entity.billboard.heightReference = heightReference;
+            }
+            marshaller.placementMode = mode;
+        }
+    }
+    function connectMarshallerCameraUpdates() {
+        const scene = window.geofs?.api?.viewer?.scene;
+        if (state.marshaller.scene === scene) return;
+        if (state.marshaller.unsubscribeRender) {
+            try { state.marshaller.unsubscribeRender(); } catch (_) {}
+        }
+        state.marshaller.scene = scene || null;
+        state.marshaller.unsubscribeRender = null;
+        if (scene?.preRender?.addEventListener) {
+            state.marshaller.unsubscribeRender = scene.preRender.addEventListener(() => {
+                if (state.marshaller.active) positionMarshallerForView(scene);
+            });
+        }
+    }
+    function refreshMarshallerAfterFocus() {
+        if (document.hidden || !state.marshallerEnabled || !state.standLocator.selectedTarget) return;
+        const refresh = () => {
+            if (document.hidden) return;
+            connectMarshallerCameraUpdates();
+            updateMarshaller();
+            window.geofs?.api?.viewer?.scene?.requestRender?.();
+        };
+        requestAnimationFrame(refresh);
+        setTimeout(refresh, 120);
+    }
     function ensureMarshallerEntity() {
         if (!state.marshallerEnabled || !state.standLocator.selectedTarget) {
             removeMarshallerEntity();
@@ -1483,6 +1614,9 @@
         const Cesium = window.Cesium;
         const entities = getCesiumEntityCollection();
         if (!Cesium || !entities) return false;
+        if (state.marshaller.entity && typeof entities.contains === "function" && !entities.contains(state.marshaller.entity)) {
+            removeMarshallerEntity();
+        }
         const target = state.standLocator.selectedTarget;
         const displayPoint = marshallerDisplayPoint(target, state.standLocator.selectedFeature);
         if (!state.marshaller.entity) {
@@ -1502,17 +1636,15 @@
                         disableDepthTestDistance: Number.POSITIVE_INFINITY,
                         distanceDisplayCondition: displayCondition,
                         show: false
-                    },
-                    label: {
-                        text: "",
-                        font: "700 12px Arial",
-                        fillColor: Cesium.Color.WHITE,
-                        outlineColor: Cesium.Color.BLACK,
-                        outlineWidth: 2,
-                        style: Cesium.LabelStyle?.FILL_AND_OUTLINE,
-                        showBackground: true,
-                        backgroundColor: Cesium.Color.fromCssColorString("#17191B").withAlpha(.94),
-                        backgroundPadding: new Cesium.Cartesian2(9, 6),
+                    }
+                });
+                const badge = createStandLocatorSign(state.standLocator.selectedRef || "", "");
+                state.marshaller.badgeEntity = entities.add({
+                    position: position,
+                    billboard: {
+                        image: badge?.image,
+                        width: badge?.width,
+                        height: badge?.height,
                         pixelOffset: new Cesium.Cartesian2(CFG.marshallerSidePanelOffsetXPx, CFG.marshallerSidePanelOffsetYPx),
                         horizontalOrigin: Cesium.HorizontalOrigin?.LEFT,
                         verticalOrigin: Cesium.VerticalOrigin?.CENTER,
@@ -1522,9 +1654,11 @@
                         show: false
                     }
                 });
+                state.marshaller.worldPoint = displayPoint;
+                state.marshaller.placementMode = "world";
             } catch (error) {
                 console.error("[Immersive Airports] Marshaller entity creation failed", error);
-                state.marshaller.entity = null;
+                removeMarshallerEntity();
                 syncStandMarkerVisibility();
                 return false;
             }
@@ -1537,19 +1671,32 @@
             return;
         }
         if (!ensureMarshallerEntity()) return;
+        connectMarshallerCameraUpdates();
         const guidance = marshallerGuidanceState();
         if (!guidance) return;
         const active = marshallerIsActivelyGuiding();
+        state.marshaller.active = active;
         if (state.marshaller.entity?.billboard) {
             state.marshaller.entity.billboard.show = active;
         }
-        if (state.marshaller.entity?.label) {
-            state.marshaller.entity.label.show = active;
+        if (state.marshaller.badgeEntity?.billboard) {
+            state.marshaller.badgeEntity.billboard.show = active;
             if (active) {
-                const ref = state.standLocator.selectedRef || "STAND";
-                state.marshaller.entity.label.text = `STAND ${ref}\n${standDistanceText(guidance.distanceM)}`;
+                const ref = state.standLocator.selectedRef || "";
+                const distanceText = standDistanceText(guidance.distanceM);
+                const badgeText = `STAND ${ref}\n${distanceText}`;
+                if (badgeText !== state.marshaller.badgeText) {
+                    const graphic = createStandLocatorSign(ref, distanceText);
+                    if (graphic) {
+                        state.marshaller.badgeEntity.billboard.image = graphic.image;
+                        state.marshaller.badgeEntity.billboard.width = graphic.width;
+                        state.marshaller.badgeEntity.billboard.height = graphic.height;
+                        state.marshaller.badgeText = badgeText;
+                    }
+                }
             }
         }
+        if (active) positionMarshallerForView();
         syncStandMarkerVisibility();
         const now = Date.now();
         let phase = 0;
@@ -1586,19 +1733,12 @@
     }
     function syncStandMarkerVisibility() {
         const marker = state.standLocator.markerEntity;
-        if (!marker) return;
+        const sign = state.standLocator.labelEntity;
+        if (!marker && !sign) return;
         const active = marshallerIsActivelyGuiding() && !!state.marshaller.entity;
         try {
-            if (marker.billboard) {
-                marker.billboard.show = !active;
-            }
-            if (marker.label) {
-                marker.label.show = !active;
-                const Cesium = window.Cesium;
-                if (!active && Cesium?.Cartesian2) {
-                    marker.label.pixelOffset = new Cesium.Cartesian2(0, -58);
-                }
-            }
+            if (marker?.billboard) marker.billboard.show = !active;
+            if (sign?.billboard) sign.billboard.show = !active;
         } catch (_) {}
     }
     function syncMarshaller() {
@@ -1720,8 +1860,20 @@
         return keys.map(key => tags?.[key]).filter(value => value !== undefined && value !== null && String(value).trim()).map(value => String(value).trim()).join(" ");
     }
     function standListIsCargoTags(tags = {}) {
-        const text = standListTagText(tags, [ "cargo", "usage", "function", "type", "service", "name", "official_name", "description", "operator" ]).toLowerCase();
+        const text = standListTagText(tags, [ "cargo", "usage", "function", "type", "service", "name", "official_name", "description" ]).toLowerCase();
         return tags.cargo === "yes" || /cargo|freight|logistics/.test(text);
+    }
+    function standListMeaningfulTag(value) {
+        const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
+        if (!normalized || /^(yes|no|true|false|unknown|undefined|none|n\/a|0|area|apron|stand|gate|parking)$/i.test(normalized)) return null;
+        return normalized.slice(0, 48);
+    }
+    function standListIsRemoteTags(tags = {}) {
+        const text = standListTagText(tags, [
+            "parking_position:category", "parking_position:type", "parking:category",
+            "stand:type", "usage", "function", "name", "official_name", "description"
+        ]);
+        return /\bremote\b|\bhard[\s-]?stand\b|\bbus[\s-]?stand\b/i.test(text);
     }
     function standListTerminalLabel(value, tags = {}) {
         const raw = String(value || "").trim().replace(/\s+/g, " ");
@@ -1735,14 +1887,24 @@
         return raw ? `Terminal ${raw.slice(0, 34)}` : "Terminal";
     }
     function standListGroupFromTags(tags = {}) {
-        const terminal = tags.terminal || tags["terminal:ref"] || tags["ref:terminal"] || tags["building:terminal"] || tags["airport:terminal"];
-        const namedTerminal = [ tags.name, tags.official_name, tags.description ].find(value => /\bterminal\b/i.test(String(value || "")));
-        if ((terminal && !/^(yes|no|true|false)$/i.test(String(terminal).trim())) || namedTerminal) {
-            return standListTerminalLabel(terminal || namedTerminal, tags);
-        }
         if (standListIsCargoTags(tags)) return "Cargo";
-        const area = tags.area || tags.zone || tags["parking:area"] || tags["aerodrome:area"];
-        if (area) return String(area).trim();
+        if (standListIsRemoteTags(tags)) return "Remote";
+        const terminal = [
+            tags.terminal, tags["terminal:ref"], tags["ref:terminal"],
+            tags["building:terminal"], tags["airport:terminal"]
+        ].map(standListMeaningfulTag).find(Boolean);
+        const namedTerminal = [ tags.name, tags.official_name, tags.description ]
+            .map(standListMeaningfulTag).find(value => /\bterminal\b/i.test(value || ""));
+        if (terminal || namedTerminal) return standListTerminalLabel(terminal || namedTerminal, tags);
+        // 'area=yes' describes OSM polygon geometry, never an airport area name.
+        for (const [key, prefix] of [
+            [ "parking:area", "Area" ], [ "aerodrome:area", "Area" ], [ "zone", "Zone" ]
+        ]) {
+            const area = standListMeaningfulTag(tags[key]);
+            if (!area) continue;
+            if (/^(terminal|apron|pier|area|zone)\b/i.test(area)) return area;
+            return prefix + " " + area;
+        }
         return null;
     }
     function standListPoint(feature) {
@@ -1750,22 +1912,6 @@
         if (feature?.parkingTargetPoint) return feature.parkingTargetPoint;
         const points = feature?.points || [];
         return points.length ? points[points.length - 1] : null;
-    }
-    function standListFeatureCenter(feature) {
-        if (feature?.center) return feature.center;
-        if (feature?.point) return feature.point;
-        const points = feature?.points || [];
-        if (!points.length) return null;
-        let lat = 0;
-        let lon = 0;
-        for (const point of points) {
-            lat += point.lat;
-            lon += point.lon;
-        }
-        return {
-            lat: lat / points.length,
-            lon: lon / points.length
-        };
     }
     function standListPointInPolygon(point, polygon) {
         if (!point || !Array.isArray(polygon) || polygon.length < 3) return false;
@@ -1780,6 +1926,11 @@
             }
         }
         return inside;
+    }
+    function standListDistanceToFeatureM(point, feature) {
+        if (!point || !feature) return Infinity;
+        if (feature.points?.length >= 3 && standListPointInPolygon(point, feature.points)) return 0;
+        return featureDistanceMeters(point, feature);
     }
     function standListApronFeatures() {
         const unique = new Map;
@@ -1796,9 +1947,9 @@
         const tags = feature?.tags || {};
         const taggedGroup = standListGroupFromTags(tags);
         if (taggedGroup) return taggedGroup;
-        const label = tags.name || tags.ref || tags["aeroway:ref"];
-        if (!label || /^apron$/i.test(String(label).trim())) return null;
-        return `Area · ${String(label).trim().slice(0, 36)}`;
+        const label = standListMeaningfulTag(tags.name || tags.ref || tags["aeroway:ref"]);
+        if (!label || /^apron$/i.test(label)) return null;
+        return /^apron\b/i.test(label) ? label.slice(0, 36) : "Apron " + label.slice(0, 36);
     }
     function standListContextGroup(feature) {
         const point = standListPoint(feature);
@@ -1806,57 +1957,69 @@
         const ref = normalizeStandQuery(feature.ref);
         for (const gate of state.standMetadata?.gates || []) {
             if (!ref || normalizeStandQuery(gate.ref) !== ref) continue;
+            // A passenger gate is not necessarily the stand with the same ref.
+            if (standListDistanceToFeatureM(point, gate) > CFG.standListGateMatchMaxDistanceM) continue;
             const group = standListGroupFromTags(gate.tags || {});
             if (group) return group;
         }
-        let nearestApron = null;
+        const apronCandidates = [];
         for (const apron of standListApronFeatures()) {
             const group = standListApronGroup(apron);
             if (!group) continue;
-            const inside = standListPointInPolygon(point, apron.points);
-            const distance = inside ? 0 : featureDistanceMeters(point, apron);
+            const distance = standListDistanceToFeatureM(point, apron);
             if (distance > CFG.standListApronMaxDistanceM) continue;
-            if (!nearestApron || distance < nearestApron.distance) {
-                nearestApron = {
-                    group: group,
-                    distance: distance
-                };
-            }
+            apronCandidates.push({ group: group, distance: distance });
         }
-        if (nearestApron) return nearestApron.group;
-        let nearestTerminal = null;
+        apronCandidates.sort((a, b) => a.distance - b.distance);
+        const bestApron = apronCandidates[0] || null;
+        const ambiguousApron = bestApron && apronCandidates.some(candidate =>
+            candidate.group !== bestApron.group && candidate.distance - bestApron.distance < CFG.standListTerminalAmbiguityM
+        );
+        const nearestApron = ambiguousApron ? null : bestApron;
+        if (nearestApron && /^(Cargo|Remote|Terminal\b)/i.test(nearestApron.group)) return nearestApron.group;
+        const terminalCandidates = [];
         for (const terminal of state.standMetadata?.terminals || []) {
-            const center = standListFeatureCenter(terminal);
-            if (!center) continue;
-            const inside = standListPointInPolygon(point, terminal.points);
-            const distance = inside ? 0 : geoDistanceMeters(point, center);
-            if (distance > CFG.standListTerminalMaxDistanceM) continue;
-            if (!nearestTerminal || distance < nearestTerminal.distance) {
-                nearestTerminal = {
-                    group: terminal.label || "Terminal",
-                    distance: distance
-                };
-            }
+            const distance = standListDistanceToFeatureM(point, terminal);
+            const limit = terminal.point ? CFG.standListTerminalNodeMaxDistanceM : CFG.standListTerminalMaxDistanceM;
+            if (distance > limit) continue;
+            terminalCandidates.push({ group: terminal.label || "Terminal", distance: distance });
         }
-        return nearestTerminal?.group || null;
+        terminalCandidates.sort((a, b) => a.distance - b.distance);
+        if (terminalCandidates.length) {
+            const best = terminalCandidates[0];
+            const ambiguous = terminalCandidates.some(candidate =>
+                candidate.group !== best.group &&
+                candidate.distance - best.distance < CFG.standListTerminalAmbiguityM
+            );
+            if (!ambiguous) return best.group;
+        }
+        // A distant stand on a mapped apron is probably remote, but distance
+        // alone does not prove it: keep that estimate distinct from OSM tags.
+        const terminalFootprints = (state.standMetadata?.terminals || []).filter(terminal => terminal.points?.length >= 3);
+        const onApron = standListApronFeatures().some(apron =>
+            standListDistanceToFeatureM(point, apron) <= CFG.standListApronMaxDistanceM
+        );
+        if (state.standMetadataReady && terminalFootprints.length && onApron) {
+            const nearestTerminalM = Math.min(...terminalFootprints.map(terminal => standListDistanceToFeatureM(point, terminal)));
+            if (nearestTerminalM >= CFG.standListRemoteMinTerminalDistanceM) return "Likely remote";
+        }
+        return nearestApron?.group || null;
     }
     function standListGroup(feature) {
-        return standListGroupFromTags(feature?.tags || {}) || standListContextGroup(feature) || "Other / Unspecified";
+        return standListGroupFromTags(feature?.tags || {}) || standListContextGroup(feature) || "Unclassified";
     }
     function standListNeedsMetadata() {
         return standLocatorFeatures().some(feature => !standListGroupFromTags(feature?.tags || {}));
     }
     function standListMetadataSummarySuffix() {
-        if (state.standMetadataLoading) return " · classifying…";
+        if (state.standMetadataLoading) return " · grouping areas…";
         if (state.standMetadataStatus === "waiting") return " · waiting for airport";
-        if (state.standMetadataReady) return " · terminal data loaded";
-        if (state.standMetadataStatus === "error") return " · basic OSM tags only";
+        if (state.standMetadataStatus === "error") return " · limited grouping";
         return "";
     }
     function standListCapability(feature) {
         const tags = feature?.tags || {};
-        if (tags.cargo === "yes") return "Cargo";
-        const value = tags.aircraft || tags["aircraft:type"] || tags["aircraft:code"] || tags["max_aircraft"] || tags["parking_position:category"];
+        const value = tags.aircraft || tags["aircraft:type"] || tags["aircraft:code"] || tags["max_aircraft"];
         return value ? String(value).trim() : "";
     }
     function standListEntries() {
@@ -1875,10 +2038,28 @@
         }
         return [ ...entries.values() ].sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true, sensitivity: "base" }));
     }
+    function standListDisplayGroup(entry) {
+        if (entry.group !== "Unclassified") return entry.group;
+        const numeric = entry.ref.match(/^\d{2,4}$/);
+        if (numeric) {
+            const start = Math.floor(Number(entry.ref) / 100) * 100;
+            return "Unclassified · " + String(start).padStart(2, "0") + "–" + (start + 99);
+        }
+        const prefix = entry.ref.match(/^([A-Z]{1,3})\d/);
+        if (prefix) return "Unclassified · " + prefix[1] + " series";
+        return "Unclassified";
+    }
     function renderStandList() {
         if (!state.standListBody || !state.standListSummary) return;
         const entries = standListEntries();
-        state.standListSummary.textContent = entries.length ? `${entries.length} available stands${standListMetadataSummarySuffix()}` : "No stand data loaded yet";
+        const query = normalizeStandQuery(state.standListSearchInput?.value);
+        const visibleEntries = query
+            ? entries.filter(entry => normalizeStandQuery(entry.ref).includes(query) || normalizeStandQuery(entry.group).includes(query))
+            : entries;
+        state.standListSummary.textContent = entries.length
+            ? String(entries.length) + " stands" + (query ? " · " + visibleEntries.length + " matching" : "") + standListMetadataSummarySuffix()
+            : "No stand data loaded yet";
+        const previousScrollTop = state.standListBody.scrollTop;
         state.standListBody.replaceChildren();
         if (!entries.length) {
             const empty = document.createElement("div");
@@ -1887,22 +2068,47 @@
             state.standListBody.appendChild(empty);
             return;
         }
+        if (!visibleEntries.length) {
+            const empty = document.createElement("div");
+            empty.className = "twy-stand-list-empty";
+            empty.textContent = "No matching stands";
+            state.standListBody.appendChild(empty);
+            return;
+        }
         const groups = new Map;
-        for (const entry of entries) {
-            if (!groups.has(entry.group)) groups.set(entry.group, []);
-            groups.get(entry.group).push(entry);
+        for (const entry of visibleEntries) {
+            const group = standListDisplayGroup(entry);
+            if (!groups.has(group)) groups.set(group, []);
+            groups.get(group).push(entry);
         }
         const groupOrder = group => {
             if (/^terminal\b/i.test(group)) return 0;
-            if (group === "Cargo") return 1;
-            if (group === "Other / Unspecified") return 3;
-            return 2;
+            if (/^(Pier|Apron|Area|Zone)\b/i.test(group)) return 1;
+            if (group === "Cargo") return 2;
+            if (group === "Remote") return 3;
+            if (group === "Likely remote") return 4;
+            if (group.startsWith("Unclassified")) return 5;
+            return 6;
         };
         [ ...groups.entries() ].sort((a, b) => groupOrder(a[0]) - groupOrder(b[0]) || a[0].localeCompare(b[0], undefined, { numeric: true, sensitivity: "base" })).forEach(([group, groupEntries]) => {
+            const section = document.createElement("section");
+            section.className = "twy-stand-list-section";
             const heading = document.createElement("div");
             heading.className = "twy-stand-list-group";
-            heading.textContent = group;
-            state.standListBody.appendChild(heading);
+            const title = document.createElement("span");
+            title.textContent = group;
+            const count = document.createElement("span");
+            count.className = "twy-stand-list-count";
+            count.textContent = String(groupEntries.length);
+            heading.append(title, count);
+            if (group === "Likely remote") {
+                heading.title = "Estimated from apron and terminal distances. Not explicitly tagged as remote.";
+            } else if (group.startsWith("Unclassified · ")) {
+                heading.title = "Stand numbers grouped for navigation only. No terminal assignment is implied.";
+            }
+            section.appendChild(heading);
+            const grid = document.createElement("div");
+            grid.className = "twy-stand-list-grid";
             groupEntries.forEach(entry => {
                 const button = document.createElement("button");
                 button.type = "button";
@@ -1923,9 +2129,12 @@
                     event.stopPropagation();
                     selectStand(entry.ref);
                 });
-                state.standListBody.appendChild(button);
+                grid.appendChild(button);
             });
+            section.appendChild(grid);
+            state.standListBody.appendChild(section);
         });
+        state.standListBody.scrollTop = previousScrollTop;
     }
     function setStandListOpen(open) {
         const next = !!open;
@@ -2010,8 +2219,11 @@
     }
     function standMetadataLabel(tags = {}) {
         if (standListIsCargoTags(tags)) return "Cargo";
-        const raw = tags.terminal || tags["terminal:ref"] || tags["ref:terminal"] || tags.ref || tags.name || tags.official_name;
-        return standListTerminalLabel(raw, tags);
+        const raw = [
+            tags.terminal, tags["terminal:ref"], tags["ref:terminal"],
+            tags.ref, tags.name, tags.official_name
+        ].map(standListMeaningfulTag).find(Boolean);
+        return standListTerminalLabel(raw || "Terminal", tags);
     }
     function parseStandMetadata(data) {
         const nodes = new Map;
@@ -2247,13 +2459,80 @@
         state.standLocator.markerImage = canvas.toDataURL("image/png");
         return state.standLocator.markerImage;
     }
+    // Render the entire two-line sign into one texture. Cesium's label background
+    // can keep its original single-line bounds when the text later gains a line.
+    function createStandLocatorSign(ref, distanceText) {
+        const title = `STAND ${ref}`;
+        const subtitle = distanceText || "";
+        const cacheKey = `${title}\n${subtitle}`;
+        const cache = state.standLocator.labelImageCache;
+        if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        const paddingX = 10;
+        const paddingY = 7;
+        const lineHeight = 19;
+        const lineGap = 2;
+        ctx.font = "700 14px Arial";
+        const titleWidth = ctx.measureText(title).width;
+        ctx.font = "700 13px Arial";
+        const subtitleWidth = ctx.measureText(subtitle).width;
+        const width = Math.ceil(Math.max(titleWidth, subtitleWidth) + paddingX * 2);
+        const height = paddingY * 2 + lineHeight * 2 + lineGap;
+        const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        canvas.width = Math.ceil(width * scale);
+        canvas.height = Math.ceil(height * scale);
+        ctx.scale(scale, scale);
+        ctx.fillStyle = "rgba(23,25,27,.94)";
+        ctx.fillRect(0, 0, width, height);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(0,0,0,.85)";
+        ctx.fillStyle = "#FFFFFF";
+        const x = width / 2;
+        const firstY = paddingY + lineHeight / 2;
+        const secondY = paddingY + lineHeight + lineGap + lineHeight / 2;
+        ctx.font = "700 14px Arial";
+        ctx.strokeText(title, x, firstY);
+        ctx.fillText(title, x, firstY);
+        ctx.font = "700 13px Arial";
+        ctx.strokeText(subtitle, x, secondY);
+        ctx.fillText(subtitle, x, secondY);
+        const result = {
+            image: canvas.toDataURL("image/png"),
+            width: width,
+            height: height
+        };
+        // Keep recent textures for repeated distances without growing the JS cache indefinitely.
+        cache.set(cacheKey, result);
+        if (cache.size > 64) cache.delete(cache.keys().next().value);
+        return result;
+    }
+    function updateStandLocatorSign(ref, distanceText) {
+        const sign = state.standLocator.labelEntity?.billboard;
+        if (!sign) return;
+        const labelText = `STAND ${ref}\n${distanceText}`;
+        if (state.standLocator.labelText === labelText) return;
+        const graphic = createStandLocatorSign(ref, distanceText);
+        if (!graphic) return;
+        sign.image = graphic.image;
+        sign.width = graphic.width;
+        sign.height = graphic.height;
+        // Keep the entire sign above the 42px pin, with a consistent 12px gap.
+        sign.pixelOffset = new window.Cesium.Cartesian2(0, -(42 + 12 + graphic.height / 2));
+        state.standLocator.labelText = labelText;
+    }
     function removeStandLocatorEntities(options = {}) {
         resetFollowMeRoute();
         stopMarshallerMonitor();
         removeMarshallerEntity();
         const entities = getCesiumEntityCollection();
         if (entities) {
-            for (const entity of [ state.standLocator.markerEntity, state.standLocator.leadInEntity ]) {
+            for (const entity of [ state.standLocator.markerEntity, state.standLocator.labelEntity, state.standLocator.leadInEntity ]) {
                 if (!entity) continue;
                 try {
                     entities.remove(entity);
@@ -2261,6 +2540,8 @@
             }
         }
         state.standLocator.markerEntity = null;
+        state.standLocator.labelEntity = null;
+        state.standLocator.labelText = null;
         state.standLocator.leadInEntity = null;
         state.standLocator.lastDistanceM = null;
         if (options.clearSelection) {
@@ -2329,25 +2610,28 @@
                 heightReference: heightReference,
                 disableDepthTestDistance: Number.POSITIVE_INFINITY,
                 distanceDisplayCondition: displayCondition
-            },
-            label: {
-                text: `STAND ${match.ref}`,
-                font: "700 14px Arial",
-                fillColor: Cesium.Color.WHITE,
-                outlineColor: Cesium.Color.BLACK,
-                outlineWidth: 2,
-                style: Cesium.LabelStyle?.FILL_AND_OUTLINE,
-                showBackground: true,
-                backgroundColor: Cesium.Color.fromCssColorString("#17191B").withAlpha(.94),
-                backgroundPadding: new Cesium.Cartesian2(10, 7),
-                pixelOffset: new Cesium.Cartesian2(0, -58),
-                horizontalOrigin: horizontalOrigin,
-                verticalOrigin: Cesium.VerticalOrigin?.BOTTOM,
-                heightReference: heightReference,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                distanceDisplayCondition: displayCondition
             }
         });
+        const initialDistanceText = standDistanceText(match.distance);
+        const signGraphic = createStandLocatorSign(match.ref, initialDistanceText);
+        if (signGraphic) {
+            state.standLocator.labelEntity = entities.add({
+                position: position,
+                billboard: {
+                    image: signGraphic.image,
+                    width: signGraphic.width,
+                    height: signGraphic.height,
+                    pixelOffset: new Cesium.Cartesian2(0, -(42 + 12 + signGraphic.height / 2)),
+                    verticalOrigin: Cesium.VerticalOrigin?.CENTER,
+                    horizontalOrigin: horizontalOrigin,
+                    heightReference: heightReference,
+                    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                    distanceDisplayCondition: displayCondition
+                }
+            });
+            state.standLocator.labelText = `STAND ${match.ref}\n${initialDistanceText}`;
+        }
+        state.standLocator.lastDistanceM = match.distance;
         const points = match.feature.points || [];
         if (points.length >= 2) {
             const positions = points.map(point => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, 0));
@@ -2432,9 +2716,7 @@
         }
         const distance = geoDistanceMeters(aircraft, target);
         state.standLocator.lastDistanceM = distance;
-        if (state.standLocator.markerEntity?.label) {
-            state.standLocator.markerEntity.label.text = `STAND ${ref}\n${standDistanceText(distance)}`;
-        }
+        updateStandLocatorSign(ref, standDistanceText(distance));
         updateStandLocatorStatus();
     }
     function startStandLocatorMonitor() {
@@ -4098,7 +4380,7 @@
             #twy-stand-list-button.active { background: #41464b; color: #f0f1f2; }
             #twy-stand-list-window {
                 position: fixed; left: 92px; top: 50%; transform: translateY(-50%);
-                width: 208px; max-height: min(560px, calc(100vh - 40px));
+                width: 248px; max-height: min(560px, calc(100vh - 40px));
                 display: none; overflow: hidden; border: 1px solid rgba(255,255,255,.12);
                 border-radius: 7px; background: rgba(25,27,30,.98);
                 box-shadow: 0 6px 18px rgba(0,0,0,.38); color: #e8eaec;
@@ -4110,11 +4392,36 @@
             .twy-stand-list-title { font-size: 11px; font-weight: 700; }
             #twy-stand-list-close { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: #92989d; cursor: pointer; font: 700 15px/20px Arial; }
             #twy-stand-list-close:hover { color: #fff; background: rgba(255,255,255,.08); }
-            #twy-stand-list-summary { padding: 6px 10px 7px; color: #858b90; font-size: 8px; border-bottom: 1px solid rgba(255,255,255,.06); }
-            #twy-stand-list-body { max-height: min(480px, calc(100vh - 112px)); overflow-y: auto; padding: 7px; }
-            .twy-stand-list-group { margin: 5px 3px 4px; color: #858b90; font-size: 7px; font-weight: 700; letter-spacing: .55px; text-transform: uppercase; }
-            .twy-stand-list-entry { width: 100%; min-height: 28px; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 0; padding: 5px 7px; border: 1px solid rgba(255,255,255,.07); border-radius: 4px; background: #272a2d; color: #e8eaec; cursor: pointer; text-align: left; }
-            .twy-stand-list-entry:hover, .twy-stand-list-entry.selected { border-color: rgba(255,210,26,.45); background: #343438; }
+            #twy-stand-list-summary { padding: 6px 10px 7px; color: #858b90; font-size: 8px; }
+            #twy-stand-list-search {
+                display: block; width: calc(100% - 20px); height: 28px; margin: 0 10px 7px;
+                padding: 0 9px; border: 1px solid rgba(255,255,255,.12); border-radius: 4px;
+                outline: none; background: #202326; color: #e8eaec; font: 600 10px Arial, Helvetica, sans-serif;
+            }
+            #twy-stand-list-search:focus { border-color: rgba(255,210,26,.62); }
+            #twy-stand-list-search::placeholder { color: #858b90; font-weight: 400; }
+            #twy-stand-list-body {
+                max-height: min(435px, calc(100vh - 155px));
+                overflow-y: auto; padding: 7px;
+                border-top: 1px solid rgba(255,255,255,.06);
+            }
+            .twy-stand-list-section { margin-bottom: 8px; }
+            .twy-stand-list-group {
+                display: flex; align-items: center; justify-content: space-between;
+                margin: 5px 3px 6px; color: #a3a9ae; font-size: 8px; font-weight: 700;
+                letter-spacing: .4px; text-transform: uppercase;
+            }
+            .twy-stand-list-count { color: #868d93; font-size: 8px; font-variant-numeric: tabular-nums; }
+            .twy-stand-list-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+            .twy-stand-list-entry {
+                width: 100%; min-width: 0; min-height: 31px; display: flex;
+                align-items: center; justify-content: space-between; gap: 4px;
+                padding: 5px 8px; border: 1px solid rgba(255,255,255,.09);
+                border-radius: 4px; background: #272a2d; color: #e8eaec;
+                cursor: pointer; text-align: left;
+            }
+            .twy-stand-list-entry:hover { border-color: rgba(255,210,26,.42); background: #343438; }
+            .twy-stand-list-entry.selected { border-color: rgba(255,210,26,.9); background: rgba(255,210,26,.11); }
             .twy-stand-list-ref { overflow: hidden; font-size: 10px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
             .twy-stand-list-meta { overflow: hidden; color: #aeb4b8; font-size: 7px; white-space: nowrap; text-overflow: ellipsis; }
             .twy-stand-list-empty { padding: 14px 7px; color: #858b90; font-size: 8px; text-align: center; }
@@ -4263,9 +4570,13 @@ AID</button>
                 <button id="twy-stand-list-close" type="button" aria-label="Close stand list">×</button>
             </div>
             <div id="twy-stand-list-summary">No stand data loaded yet</div>
+            <input id="twy-stand-list-search" type="text" autocomplete="off"
+                   spellcheck="false" aria-label="Search available stands"
+                   placeholder="Find a stand..." />
             <div id="twy-stand-list-body"></div>
         `;
         document.body.appendChild(standListWindow);
+        standListWindow.addEventListener("click", event => event.stopPropagation());
         const geofsRight = document.querySelector(".geofs-ui-right");
         const pads = geofsRight?.querySelector(".geofs-pads-container");
         if (geofsRight) {
@@ -4308,6 +4619,7 @@ AID</button>
         state.standListButton = standListButton;
         state.standListWindow = standListWindow;
         state.standListSummary = standListWindow.querySelector("#twy-stand-list-summary");
+        state.standListSearchInput = standListWindow.querySelector("#twy-stand-list-search");
         state.standListBody = standListWindow.querySelector("#twy-stand-list-body");
         state.marshallerToggle = standPanel.querySelector("#twy-marshaller-toggle");
         state.marshallerOffsetValue = standPanel.querySelector("#twy-marshaller-offset-value");
@@ -4501,6 +4813,24 @@ AID</button>
             event.stopPropagation();
             setStandListOpen(false);
         };
+        state.standListSearchInput.addEventListener("input", event => {
+            event.stopPropagation();
+            state.standListBody.scrollTop = 0;
+            renderStandList();
+        });
+        state.standListSearchInput.addEventListener("keydown", event => {
+            event.stopPropagation();
+            if (event.key === "Escape") {
+                event.preventDefault();
+                if (state.standListSearchInput.value) {
+                    state.standListSearchInput.value = "";
+                    renderStandList();
+                } else {
+                    setStandListOpen(false);
+                }
+            }
+        });
+        state.standListSearchInput.addEventListener("keyup", event => event.stopPropagation());
         state.standClearButton.onclick = event => {
             event.stopPropagation();
             clearStandSelection();
@@ -7760,6 +8090,8 @@ AID</button>
     }
     async function main() {
         await waitForGeoFS();
+        window.addEventListener("focus", refreshMarshallerAfterFocus);
+        document.addEventListener("visibilitychange", refreshMarshallerAfterFocus);
         addUI();
         startGroundHandlingMonitor();
         resetDetectorState();
