@@ -1,11 +1,5 @@
 <p align="center">
-  <img src="immersive-airports-hero.jpeg" alt="Immersive Airports for GeoFS" width="100%">
-</p>
-
-<p align="center">
-  <a href="https://github.com/neutrino-labs-studio/immersive-airports/raw/refs/heads/main/immersive-airports.user.js">
-    <img src="https://img.shields.io/badge/INSTALL-IMMERSIVE%20AIRPORTS-FFD21A?style=for-the-badge&labelColor=17191B&color=FFD21A" alt="Install Immersive Airports">
-  </a>
+  <img src="https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports-5.0.0-hero.JPEG" alt="Immersive Airports for GeoFS" width="100%">
 </p>
 
 <p align="center">
@@ -13,14 +7,49 @@
 </p>
 
 <p align="center">
-  <a href="https://sites.google.com/view/immersive-airports/takeoff">Website</a>
-  ·
-  <a href="https://github.com/neutrino-labs-studio/immersive-airports/raw/refs/heads/main/immersive-airports.user.js">Install</a>
-  ·
-  <a href="#installation">Installation guide</a>
+  <a href="https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports-beta.user.js">
+    <img src="https://img.shields.io/badge/INSTALL-v5.0.0%20BETA-FFD21A?style=for-the-badge&labelColor=17191B" alt="Install Immersive Airports v5.0.0 Beta">
+  </a>
 </p>
 
----
+<p align="center">
+  <sub>
+    <a href="https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports.user.js">Prefer the stable version? Install v4.8.5</a>
+    &nbsp;·&nbsp;
+    <a href="#the-apron-alive-update">Explore what's new</a>
+  </sub>
+</p>
+
+
+
+## **v5.0.0 BETA** · The Apron Alive Update Is Here!
+
+We've been working on something pretty exciting lately!
+
+One thing we've always wanted to do with Immersive Airports is make airports feel a little more alive. We've already got taxiways, parking stands and marshallers, but we felt there was still room for something new.
+
+So we decided to take things a step further.
+<br><br>
+
+### Meet the New Follow Me Car!
+
+Yep, you can now have your very own **Follow Me car** guiding you around the airport and all the way to your selected parking stand!
+
+The beta also expands airport navigation and adds optional ground-handling tools.
+<br><br>
+### What's included?
+- **3D Follow Me vehicle**: Route guidance to a selected stand, adjustable lead distance, smooth vehicle movement and a nighttime beacon.
+- **Airport-wide moving map**: Wider ground-data coverage, with aircraft tracking, zooming and panning.
+- **Stand List**: Browse and select stands, grouped by airport area when the available data supports it.
+- **Destination preloading**: Prepare destination-airport data from a usable GeoFS flight plan before arrival.
+- **Ground-handling extras**: Optional Ground Grip Physics, Turn Aid and a draggable throttle visualizer.
+- **Several Bug Fixes**
+
+> **Beta release:** Features may behave differently across airports and aircraft. Routing and stand coverage depend on available OpenStreetMap data. Please [report reproducible issues](https://github.com/neutrino-labs-studio/immersive-airports/issues).
+
+**Stable and Beta are separate installations.** To try the beta, disable the Stable userscript in Tampermonkey first. You can switch back by disabling Beta and re-enabling Stable.
+
+
 
 ## About
 
@@ -51,6 +80,10 @@ Coming from people who actually play GeoFS, this is the add-on we always wanted 
 
 </details>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports-hero.jpeg" alt="Immersive Airports for GeoFS" width="90%">
+</p>
+
 ## Features
 
 - Dynamic taxiway and airport ground overlays
@@ -61,27 +94,23 @@ Coming from people who actually play GeoFS, this is the add-on we always wanted 
 - Automatic animated marshaller display with directional instructions
 - Automatic departure cleanup and arrival preparation
 
+For new beta-only features, see [The Apron Alive Update](#the-apron-alive-update).
+
 ## Installation
 
 ### 1. Install Tampermonkey
 
 Install the Tampermonkey browser extension if you do not already have it.
 
-### 2. Install Immersive Airports
+### 2. Choose your version
 
-Click the button below:
+Use the **Beta** installation button or the **Stable** download link at the top of this page. Tampermonkey will open an installation screen; confirm to install.
 
-<p align="center">
-  <a href="https://github.com/neutrino-labs-studio/immersive-airports/raw/refs/heads/main/immersive-airports.user.js">
-    <img src="https://img.shields.io/badge/INSTALL%20NOW-FFD21A?style=for-the-badge&labelColor=17191B" alt="Install Immersive Airports">
-  </a>
-</p>
-
-Tampermonkey will open its installation screen. Confirm the installation when prompted.
+**Only enable one version at a time.** If you already use Stable, disable it in Tampermonkey before enabling Beta. The two versions have separate update channels.
 
 ### 3. Launch GeoFS
 
-Open GeoFS normally. Immersive Airports will load automatically when the simulator is ready.
+Open GeoFS normally. Immersive Airports will start once the simulator is ready.
 
 ## Short Manual
 
@@ -93,6 +122,7 @@ Open GeoFS normally. Immersive Airports will load automatically when the simulat
 | **NOTIF** | Turns taxiway, runway and speed notifications on or off. |
 | **STD** | Opens the stand locator, marshaller and stopping-position calibration controls. |
 | **MAP** | Opens or closes the live airport moving map. |
+| **EXTRAS** *(Beta)* | Opens optional ground-handling tools. |
 
 ### Airport controls
 
@@ -102,7 +132,7 @@ Open GeoFS normally. Immersive Airports will load automatically when the simulat
 | **Stand lead-in lines** | Shows or hides parking guidance lines. |
 | **Stand numbers** | Shows or hides stand labels. |
 | **Auto-load airports** | Automatically loads the airport around your aircraft. |
-| **Load / Refresh airport** | Manually loads or refreshes the current airport. |
+| **Load airport** | Manually loads or refreshes airport data. |
 | **Reset** | Clears the currently loaded airport. |
 | **Modify ARR** | Releases the selected arrival so you can choose another one. Press twice to confirm. |
 
@@ -111,6 +141,9 @@ Open GeoFS normally. Immersive Airports will load automatically when the simulat
 | Control | Function |
 |---|---|
 | **FIND** | Selects the stand entered in the search box. |
+| **STAND LIST** *(Beta)* | Opens the browsable stand list. |
+| **Follow-me vehicle** *(Beta)* | Turns the 3D escort vehicle on or off. Select a stand to request guidance. |
+| **Follow-me distance − / +** *(Beta)* | Adjusts how far ahead the escort vehicle travels. |
 | **Marshaller guidance** | Enables or disables the animated marshaller. |
 | **STOP OFFSET − / +** | Adjusts where the aircraft should stop relative to the stand point. |
 | **CLEAR LOCATOR** | Removes the selected stand and its guidance. |
@@ -119,10 +152,17 @@ Open GeoFS normally. Immersive Airports will load automatically when the simulat
 
 | Control | Function |
 |---|---|
-| **LOCK** | Keeps the moving map fixed at the position you selected. |
+| **FOLLOW / LOCK** | Switches between following the aircraft and keeping the map at a selected position. |
 | **− / +** | Zooms the moving map out or in. |
 | **×** | Closes the moving map. |
 
+### Extras (Beta)
+
+| Control | Function |
+|---|---|
+| **Ground Grip Physics** | Adjusts ground grip and steering response. |
+| **Throttle visualizer** | Displays throttle input in a draggable overlay. |
+| **TURN AID** | Optional tighter turning response; intended for taxiing only. |
 
 ## How it works
 
@@ -164,14 +204,22 @@ The system continuously synchronizes with the aircraft to provide moving-map tra
 
 After selecting a stand, Immersive Airports calculates the aircraft’s position relative to the parking point and lead-in direction. Guidance transitions into dynamic marshalling instructions as the aircraft approaches.
 
+### Beta: Follow Me and arrival preparation
+
+Follow Me uses available taxiway and parking geometry to plan a route to the selected stand. The vehicle moves independently of the aircraft with speed smoothing and an adjustable lead distance; a complete route is not guaranteed at every airport.
+
+When a usable destination is available in the GeoFS flight plan, the beta can preload airport data before arrival.
+
 </details>
 
 <p align="center">
-  <img src="immersive-airports-before-after.jpeg"
+  <img src="https://raw.githubusercontent.com/neutrino-labs-studio/immersive-airports/main/immersive-airports-before-after.jpeg"
        alt="GeoFS before and after using Immersive Airports"
        width="100%">
+</p>
 
 ## Compatibility
+
 ### Recommended
 
 - The latest version of Google Chrome or Microsoft Edge
@@ -189,13 +237,18 @@ For an even more immersive airport experience, pair Immersive Airports with the 
 
 ## Updates
 
-Updates are delivered through the same userscript installation. When a new version is published, Tampermonkey can detect and install it. After installation, it's our job to send you the new versions.
+Stable and Beta use different userscripts and update URLs:
+
+- **Stable:** `immersive-airports.user.js` — stable releases.
+- **Beta:** `immersive-airports-beta.user.js` — experimental releases, starting with `5.0.0-beta.1`.
+
+Tampermonkey can check for updates to the version you installed. Existing Stable installations do **not** automatically switch to Beta.
 
 ## Support
 
 For product information and guidance, visit the [Immersive Airports website](https://sites.google.com/view/immersive-airports/takeoff).
 
-Problems and bug reports can be submitted through the repository’s [Issues](https://github.com/neutrino-labs-studio/immersive-airports/issues) page.
+Problems and bug reports can be submitted through the repository’s [Issues](https://github.com/neutrino-labs-studio/immersive-airports/issues) page. For beta reports, please include the version, airport ICAO, aircraft type and steps to reproduce the issue.
 
 ### Data accuracy
 
